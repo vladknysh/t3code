@@ -365,6 +365,12 @@ import {
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
+  ThreadGroupError,
+  ThreadGroupListResult,
+  ThreadGroupUpdateInput,
+  ThreadGroupUpdateResult,
+} from "./threadGroup.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -531,6 +537,9 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
+
+  threadGroupsSubscribe: "threadGroups.subscribe",
+  threadGroupsUpdate: "threadGroups.update",
 
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -1882,6 +1891,23 @@ const WsScheduledTasksGetWebhookDeliveryRpc = Rpc.make(
   },
 );
 
+const threadGroupError = Schema.Union([ThreadGroupError, EnvironmentAuthorizationError]);
+
+const WsThreadGroupsSubscribeRpc = Rpc.make(WS_METHODS.threadGroupsSubscribe, {
+  payload: Schema.Struct({}),
+  success: ThreadGroupListResult,
+  error: threadGroupError,
+  stream: true,
+});
+
+// Every change is one tagged input through one method, like orchestration
+// dispatch: one client command and one permission cover them all.
+const WsThreadGroupsUpdateRpc = Rpc.make(WS_METHODS.threadGroupsUpdate, {
+  payload: ThreadGroupUpdateInput,
+  success: ThreadGroupUpdateResult,
+  error: threadGroupError,
+});
+
 const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -1973,6 +1999,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSecretsAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
+  WsThreadGroupsSubscribeRpc,
+  WsThreadGroupsUpdateRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
