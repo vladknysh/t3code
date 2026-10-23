@@ -49,7 +49,7 @@ const GroupUpdateTool = Tool.make("t3_group_update", {
 
 const GroupInfoTool = Tool.make("t3_group_info", {
   description:
-    "Describe a thread group: each member's environment, title, status, settled state, model, the task it was started with, its latest request, and its latest reply. Members on linked environments are read there. Omit groupId for the group this thread belongs to. status is working when any member is running.",
+    "Describe a thread group: each member's environment, title, status, settled state, model, the task it was started with, its latest request, and its latest reply. Members on linked environments are read there through this environment's links; a call forwarded here from another environment reads only this environment's members. Omit groupId for the group this thread belongs to among the groups stored here. status is working when any member is running; a member that cannot be read comes back with unavailable set.",
   parameters: ThreadGroupMcpInfoInput,
   success: ThreadGroupMcpInfoResult,
   failure: OrchestratorMcpFailure,

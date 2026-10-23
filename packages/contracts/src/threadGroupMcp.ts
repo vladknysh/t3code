@@ -78,7 +78,8 @@ export type ThreadGroupMcpUpdateResult = typeof ThreadGroupMcpUpdateResult.Type;
 export const ThreadGroupMcpInfoInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
   groupId: Schema.optional(ThreadGroupId).annotate({
-    description: "Group to describe. Omit for the group the calling thread belongs to.",
+    description:
+      "Group to describe. Omit for the group the calling thread belongs to, among the groups stored on this environment.",
   }),
 });
 export type ThreadGroupMcpInfoInput = typeof ThreadGroupMcpInfoInput.Type;

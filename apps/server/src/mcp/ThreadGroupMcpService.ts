@@ -26,11 +26,16 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 
-/** Pages of a member's messages read to find its latest one. */
-const MAX_MESSAGE_PAGES = 10;
-const MESSAGE_PAGE_SIZE = 100;
 const MESSAGE_CHARS = 600;
+const MESSAGE_PAGE_SIZE = 100;
+/**
+ * How far back from a member's newest item the latest messages are looked
+ * for: a long turn of tool calls can separate the last ask and reply from the end.
+ */
+const TAIL_WINDOWS = [200, 1_000, 5_000] as const;
 const MEMBER_READ_CONCURRENCY = 4;
+/** A machine that went to sleep must not hold the whole description. */
+const MEMBER_READ_TIMEOUT = "15 seconds";
 
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set([
   "preparing",
@@ -94,20 +99,14 @@ const toChange = (
   }
 };
 
-/** What a member's messages say about its work: the ask, the latest ask, the latest answer. */
+/** The latest ask and the latest answer among a member's newest messages. */
 const summarizeMessages = (
   items: OrchestratorMcpThreadReadResult["items"],
-): Pick<ThreadGroupMcpMemberInfo, "task" | "latestRequest" | "latestReply"> => {
-  const user = items.filter((item) => item.type === "user_message" && item.text !== null);
-  const assistant = items.filter((item) => item.type === "assistant_message" && item.text);
-  const task = user[0]?.text ?? null;
-  const latest = user.at(-1)?.text ?? null;
-  return {
-    task,
-    latestRequest: user.length > 1 ? latest : null,
-    latestReply: assistant.at(-1)?.text ?? null,
-  };
-};
+): Pick<ThreadGroupMcpMemberInfo, "latestRequest" | "latestReply"> => ({
+  latestRequest: items.findLast((item) => item.type === "user_message")?.text ?? null,
+  latestReply:
+    items.findLast((item) => item.type === "assistant_message" && item.text)?.text ?? null,
+});
 
 const make = Effect.gen(function* () {
   const groups = yield* ThreadGroups.ThreadGroupService;
@@ -115,14 +114,60 @@ const make = Effect.gen(function* () {
   const forwarding = yield* PeerForwarding.PeerForwarding;
   const environment = yield* ServerEnvironment.ServerEnvironment;
 
+  /**
+   * Members here are read as an outside reader (no calling thread), so reading
+   * a delegated child's result does not acknowledge it for the caller. Members
+   * elsewhere are read through the caller's link only when the caller is an
+   * agent here: a call that itself came over a link stays on this environment,
+   * so a group cannot carry a caller into environments it has no link to.
+   */
   const readThread = (
     scope: McpInvocationScope,
     environmentId: EnvironmentId,
     input: OrchestratorMcpThreadReadInput,
   ) =>
     environmentId === scope.environmentId
-      ? orchestrator.readThread(scope, input)
-      : forwarding.call(scope, OrchestratorToolkit.tools.t3_thread_read, environmentId, input);
+      ? orchestrator.readThread({ ...scope, thread: undefined }, input)
+      : scope.client === undefined
+        ? forwarding.call(scope, OrchestratorToolkit.tools.t3_thread_read, environmentId, input)
+        : Effect.fail(
+            new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message:
+                "This thread lives on another environment. Ask from an environment linked to it.",
+            }),
+          );
+
+  /** The newest message items, looking further back until both an ask and a reply turn up. */
+  const readTail = Effect.fnUntraced(function* (
+    scope: McpInvocationScope,
+    member: ThreadGroupMember,
+    itemCount: number,
+  ) {
+    let items: OrchestratorMcpThreadReadResult["items"] = [];
+    for (const window of TAIL_WINDOWS) {
+      const from = Math.max(-1, itemCount - window - 1);
+      items = [];
+      let afterPosition = from;
+      // Pages forward from the window start; stops once the newest item is in.
+      while (true) {
+        const page = yield* readThread(scope, member.environmentId, {
+          threadId: member.threadId,
+          view: "messages",
+          limit: MESSAGE_PAGE_SIZE,
+          runLimit: 1,
+          maxCharsPerItem: MESSAGE_CHARS,
+          afterPosition,
+        });
+        items = [...items, ...page.items].slice(-MESSAGE_PAGE_SIZE);
+        if (!page.hasMore || page.nextPosition === null) break;
+        afterPosition = page.nextPosition;
+      }
+      const found = (type: string) => items.some((item) => item.type === type);
+      if (from === -1 || (found("user_message") && found("assistant_message"))) break;
+    }
+    return items;
+  });
 
   const readMember = Effect.fn("ThreadGroupMcpService.readMember")(
     function* (
@@ -130,25 +175,20 @@ const make = Effect.gen(function* () {
       member: ThreadGroupMember,
       environmentLabel: string | null,
     ) {
-      const base = { ...member, environmentLabel };
-      const pages: Array<OrchestratorMcpThreadReadResult> = [];
-      let afterPosition: number | undefined;
-      for (let page = 0; page < MAX_MESSAGE_PAGES; page += 1) {
-        const result = yield* readThread(scope, member.environmentId, {
-          threadId: member.threadId,
-          view: "messages",
-          limit: MESSAGE_PAGE_SIZE,
-          runLimit: 1,
-          maxCharsPerItem: MESSAGE_CHARS,
-          ...(afterPosition === undefined ? {} : { afterPosition }),
-        });
-        pages.push(result);
-        if (!result.hasMore || result.nextPosition === null) break;
-        afterPosition = result.nextPosition;
-      }
-      const thread = pages.at(-1)!.thread;
+      const head = yield* readThread(scope, member.environmentId, {
+        threadId: member.threadId,
+        view: "messages",
+        limit: 1,
+        runLimit: 1,
+        maxCharsPerItem: MESSAGE_CHARS,
+      });
+      const thread = head.thread;
+      const tail = yield* readTail(scope, member, thread.itemCount);
+      const task = head.items.find((item) => item.type === "user_message")?.text ?? null;
+      const latest = summarizeMessages(tail);
       return {
-        ...base,
+        ...member,
+        environmentLabel,
         thread: {
           projectId: thread.projectId,
           title: thread.title,
@@ -161,26 +201,32 @@ const make = Effect.gen(function* () {
           pendingRequestCount: thread.pendingRequestCount,
           updatedAt: thread.updatedAt,
         },
-        ...summarizeMessages(pages.flatMap((page) => page.items)),
+        task,
+        latestRequest: latest.latestRequest !== task ? latest.latestRequest : null,
+        latestReply: latest.latestReply,
         unavailable: null,
       } satisfies ThreadGroupMcpMemberInfo;
     },
-    (effect, _scope, member, environmentLabel) =>
-      effect.pipe(
-        // One unreadable member (deleted, or its machine is asleep) must not hide the others.
-        Effect.catchTags({
-          OrchestratorMcpFailure: (failure) =>
-            Effect.succeed({
-              ...member,
-              environmentLabel,
-              thread: null,
-              task: null,
-              latestRequest: null,
-              latestReply: null,
-              unavailable: failure.message,
-            } satisfies ThreadGroupMcpMemberInfo),
+    (effect, _scope, member, environmentLabel) => {
+      const unavailable = (reason: string) =>
+        Effect.succeed({
+          ...member,
+          environmentLabel,
+          thread: null,
+          task: null,
+          latestRequest: null,
+          latestReply: null,
+          unavailable: reason,
+        } satisfies ThreadGroupMcpMemberInfo);
+      // One unreadable member (deleted, or its machine is asleep) must not hide the others.
+      return effect.pipe(
+        Effect.timeoutOrElse({
+          duration: MEMBER_READ_TIMEOUT,
+          orElse: () => unavailable(`No answer within ${MEMBER_READ_TIMEOUT}.`),
         }),
-      ),
+        Effect.catchTags({ OrchestratorMcpFailure: (failure) => unavailable(failure.message) }),
+      );
+    },
   );
 
   const environmentLabels = Effect.fn("ThreadGroupMcpService.environmentLabels")(function* (
