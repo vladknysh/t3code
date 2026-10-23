@@ -63,6 +63,7 @@ export class ThreadGroupService extends Context.Service<
 interface MembersChange {
   readonly groupId: ThreadGroupId;
   readonly members: ReadonlyArray<ThreadGroupMember>;
+  readonly from?: ThreadGroupMember | undefined;
 }
 
 interface GroupRow {
@@ -77,6 +78,8 @@ interface MemberRow {
   readonly group_id: string;
   readonly environment_id: string;
   readonly thread_id: string;
+  readonly from_environment_id: string | null;
+  readonly from_thread_id: string | null;
 }
 
 const make = Effect.gen(function* () {
@@ -104,6 +107,13 @@ const make = Effect.gen(function* () {
         .map((member) => ({
           environmentId: EnvironmentId.make(member.environment_id),
           threadId: ThreadId.make(member.thread_id),
+          from:
+            member.from_environment_id === null || member.from_thread_id === null
+              ? null
+              : {
+                  environmentId: EnvironmentId.make(member.from_environment_id),
+                  threadId: ThreadId.make(member.from_thread_id),
+                },
         })),
     }));
 
@@ -116,7 +126,8 @@ const make = Effect.gen(function* () {
         ORDER BY created_at, group_id
       `;
       const members = yield* sql<MemberRow>`
-        SELECT group_id, environment_id, thread_id FROM thread_group_members
+        SELECT group_id, environment_id, thread_id, from_environment_id, from_thread_id
+        FROM thread_group_members
         ORDER BY added_at, rowid
       `;
       return toGroups(groups, members);
@@ -130,7 +141,8 @@ const make = Effect.gen(function* () {
       WHERE group_id = ${groupId}
     `;
     const members = yield* sql<MemberRow>`
-      SELECT group_id, environment_id, thread_id FROM thread_group_members
+      SELECT group_id, environment_id, thread_id, from_environment_id, from_thread_id
+        FROM thread_group_members
       WHERE group_id = ${groupId}
       ORDER BY added_at, rowid
     `;
@@ -168,12 +180,24 @@ const make = Effect.gen(function* () {
     groupId: ThreadGroupId,
     members: ReadonlyArray<ThreadGroupMember>,
     at: string,
+    from: ThreadGroupMember | undefined,
   ) {
     for (const member of members) {
+      // The thread bringing others in is not brought in by itself.
+      const origin =
+        from === undefined ||
+        (from.environmentId === member.environmentId && from.threadId === member.threadId)
+          ? null
+          : from;
       yield* leaveOtherGroups(member, groupId, at);
       yield* sql`
-        INSERT INTO thread_group_members (group_id, environment_id, thread_id, added_at)
-        VALUES (${groupId}, ${member.environmentId}, ${member.threadId}, ${at})
+        INSERT INTO thread_group_members (
+          group_id, environment_id, thread_id, added_at, from_environment_id, from_thread_id
+        )
+        VALUES (
+          ${groupId}, ${member.environmentId}, ${member.threadId}, ${at},
+          ${origin?.environmentId ?? null}, ${origin?.threadId ?? null}
+        )
         ON CONFLICT (environment_id, thread_id) DO NOTHING
       `;
     }
@@ -240,6 +264,7 @@ const make = Effect.gen(function* () {
   const create = Effect.fn("ThreadGroupService.create")(function* (input: {
     readonly title: string;
     readonly members: ReadonlyArray<ThreadGroupMember>;
+    readonly from?: ThreadGroupMember | undefined;
   }) {
     const groupId = ThreadGroupId.make(yield* crypto.randomUUIDv4().pipe(storage("create")));
     const at = yield* now;
@@ -250,7 +275,7 @@ const make = Effect.gen(function* () {
             INSERT INTO thread_groups (group_id, title, created_at, updated_at)
             VALUES (${groupId}, ${input.title}, ${at}, ${at})
           `;
-          yield* addMembers(groupId, input.members, at);
+          yield* addMembers(groupId, input.members, at, input.from);
           yield* dropEmptyGroups;
           return (yield* readOne(groupId)) ?? null;
         }),
@@ -273,7 +298,7 @@ const make = Effect.gen(function* () {
 
   const add = Effect.fn("ThreadGroupService.addMembers")(function* (input: MembersChange) {
     return yield* mutate("add-members", input.groupId, (at) =>
-      addMembers(input.groupId, input.members, at),
+      addMembers(input.groupId, input.members, at, input.from),
     );
   });
 

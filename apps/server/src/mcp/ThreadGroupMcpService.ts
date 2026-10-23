@@ -11,6 +11,7 @@ import {
   type ThreadGroupMcpUpdateInput,
   type ThreadGroupMcpUpdateResult,
   type ThreadGroupMember,
+  type ThreadGroupMemberEntry,
   type ThreadGroupNotFoundError,
   type ThreadGroupStorageError,
   type ThreadGroupUpdateInput,
@@ -83,15 +84,22 @@ const toChange = (
     environmentId: member.environmentId ?? scope.environmentId,
     threadId: member.threadId,
   }));
+  // An agent here that adds threads is where they came from, as when it
+  // launched one in another project. A call forwarded from another
+  // environment has no calling thread here.
+  const from =
+    scope.thread === undefined
+      ? {}
+      : { from: { environmentId: scope.environmentId, threadId: scope.thread.threadId } };
   // The input schema guarantees the fields each action needs.
   const groupId = input.groupId!;
   switch (input.action) {
     case "create":
-      return { _tag: "create", title: input.title!, members };
+      return { _tag: "create", title: input.title!, members, ...from };
     case "rename":
       return { _tag: "rename", groupId, title: input.title! };
     case "add_members":
-      return { _tag: "add-members", groupId, members };
+      return { _tag: "add-members", groupId, members, ...from };
     case "remove_members":
       return { _tag: "remove-members", groupId, members };
     case "delete":
@@ -173,7 +181,7 @@ const make = Effect.gen(function* () {
   const readMember = Effect.fn("ThreadGroupMcpService.readMember")(
     function* (
       scope: McpInvocationScope,
-      member: ThreadGroupMember,
+      member: ThreadGroupMemberEntry,
       environmentLabel: string | null,
     ) {
       const head = yield* readThread(scope, member.environmentId, {

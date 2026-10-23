@@ -1,7 +1,11 @@
-import { EnvironmentId, IsoDateTime, ThreadGroupId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, IsoDateTime, ProjectId, ThreadGroupId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { defaultThreadGroupTitle, resolveSidebarThreadGroups } from "./Sidebar.groups";
+import {
+  defaultThreadGroupTitle,
+  resolveSidebarThreadGroups,
+  threadGroupLanes,
+} from "./Sidebar.groups";
 
 const mini = EnvironmentId.make("env-mini");
 const laptop = EnvironmentId.make("env-laptop");
@@ -30,6 +34,7 @@ const group = (key: string, members: ReadonlyArray<Thread>, environmentId = mini
     members: members.map((member) => ({
       environmentId: member.environmentId,
       threadId: member.id,
+      from: null,
     })),
     sessionThreadId: null,
     createdAt: at,
@@ -109,5 +114,26 @@ describe("defaultThreadGroupTitle", () => {
   it("falls back to the first title when the shared start is too short", () => {
     expect(defaultThreadGroupTitle(["Fix login", "Add billing"])).toBe("Fix login");
     expect(defaultThreadGroupTitle([])).toBe("New group");
+  });
+});
+
+describe("threadGroupLanes", () => {
+  it("puts members in one lane per project and machine, in first-seen order", () => {
+    const at = (environmentId: EnvironmentId, projectId: string, id: string) => ({
+      environmentId,
+      projectId: ProjectId.make(projectId),
+      id,
+    });
+    const lanes = threadGroupLanes([
+      at(mini, "shopfront", "a"),
+      at(laptop, "paykit", "b"),
+      at(mini, "shopfront", "c"),
+      at(laptop, "shopfront", "d"),
+    ]);
+    expect(lanes.map((lane) => [lane.key, lane.members.map((member) => member.id)])).toEqual([
+      ["env-mini:shopfront", ["a", "c"]],
+      ["env-laptop:paykit", ["b"]],
+      ["env-laptop:shopfront", ["d"]],
+    ]);
   });
 });

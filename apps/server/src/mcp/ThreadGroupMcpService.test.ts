@@ -308,6 +308,30 @@ it.layer(layer)("ThreadGroupMcpService", (it) => {
     }),
   );
 
+  it.effect("records the calling agent as where the threads it adds came from", () =>
+    Effect.gen(function* () {
+      const service = yield* ThreadGroupMcpService.ThreadGroupMcpService;
+      const { group } = yield* service.update(threadCaller("rate-limit-research-api"), {
+        action: "create",
+        title: "spawned work",
+        members: [
+          { threadId: ThreadId.make("rate-limit-research-api") },
+          member(laptop, "rate-limit-research-web"),
+        ],
+      });
+      assert.deepStrictEqual(group?.members[1]?.from, member(mini, "rate-limit-research-api"));
+      const info = yield* service.info(threadCaller("orchestrator"), { groupId: group!.id });
+      assert.strictEqual(info.members[1]?.from?.threadId, "rate-limit-research-api");
+      // A forwarded call has no calling thread here, so it records none.
+      const forwarded = yield* service.update(linkCaller, {
+        action: "create",
+        title: "from a link",
+        members: [member(mini, "short-local")],
+      });
+      assert.isNull(forwarded.group?.members[0]?.from);
+    }),
+  );
+
   it.effect("reads only this environment's members for a call that came over a link", () =>
     Effect.gen(function* () {
       const service = yield* ThreadGroupMcpService.ThreadGroupMcpService;

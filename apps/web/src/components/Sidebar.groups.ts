@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadGroup, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadGroup, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import type { EnvironmentThreadGroup } from "../state/threadGroups";
@@ -97,4 +97,41 @@ export function defaultThreadGroupTitle(titles: readonly string[]): string {
   const shared = prefix.replace(TITLE_SEPARATORS, "");
   const title = rest.length > 0 && shared.length >= 3 ? shared : first;
   return title.length > 64 ? `${title.slice(0, 63)}…` : title;
+}
+
+/** How a group lays out its members: C1 lanes or C3 folder tabs. */
+export type SidebarThreadGroupLayout = "lanes" | "folder";
+
+/** A group's colour, one of the tones index.css defines, steady for its id. */
+export function threadGroupTone(groupId: string): number {
+  let hash = 0;
+  for (const char of groupId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return hash % THREAD_GROUP_TONES;
+}
+const THREAD_GROUP_TONES = 5;
+
+/** environmentId:projectId, the key the sidebar's project maps use. */
+export type SidebarProjectKey = `${EnvironmentId}:${ProjectId}`;
+
+export interface SidebarThreadGroupLane<T> {
+  /** One lane per repo on one machine. */
+  readonly key: SidebarProjectKey;
+  readonly members: readonly T[];
+}
+
+/**
+ * Members by project, lanes in the order their first member appears. Two
+ * checkouts of one repo on two machines are two lanes: they are separate work.
+ */
+export function threadGroupLanes<
+  T extends { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+>(members: readonly T[]): readonly SidebarThreadGroupLane<T>[] {
+  const lanes = new Map<SidebarProjectKey, T[]>();
+  for (const member of members) {
+    const key: SidebarProjectKey = `${member.environmentId}:${member.projectId}`;
+    const lane = lanes.get(key);
+    if (lane) lane.push(member);
+    else lanes.set(key, [member]);
+  }
+  return [...lanes].map(([key, laneMembers]) => ({ key, members: laneMembers }));
 }

@@ -473,6 +473,30 @@ export function SortableThreadRow(
   // Keyed by variant so a card/slim switch remounts the row.
   return <SidebarThreadRow key={rowProps.variant} {...rowProps} thread={thread} sortable={bag} />;
 }
+/** A project lane's heading inside a group: the repo and the machine it runs on. */
+function SidebarGroupLaneHeading(props: {
+  project: EnvironmentProject | null;
+  projectName: string;
+  machine: EnvironmentMachineKind;
+  machineLabel: string | null;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 px-(--sidebar-row-content-inset) pt-1.5 pb-0.5 text-xs text-muted-foreground">
+      {props.project ? (
+        <ProjectFavicon project={props.project} className="size-3.5 shrink-0" />
+      ) : null}
+      <span className="truncate">{props.projectName}</span>
+      {props.machineLabel ? (
+        <>
+          <span aria-hidden>·</span>
+          <EnvironmentMachineIcon aria-hidden kind={props.machine} className="size-3 shrink-0" />
+          <span className="truncate">{props.machineLabel}</span>
+        </>
+      ) : null}
+      <span aria-hidden className="h-px min-w-3 flex-1 border-t border-dashed border-border" />
+    </div>
+  );
+}
 export type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
 const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
   pin: (
@@ -517,6 +541,21 @@ type SidebarThreadRowProps = {
   isPinned: boolean;
   /** A member shown under its group's row. */
   nested?: boolean | undefined;
+  /** How the member's group lays out: on a coloured rail, or inside a tinted folder. */
+  groupLayout?: "lanes" | "folder" | undefined;
+  /** The member's group colour (data-group-tone), so its rail or folder matches the group row. */
+  groupTone?: number | undefined;
+  /** The last member of a folder closes its bottom edge. */
+  closesGroup?: boolean | undefined;
+  /**
+   * The row starts a project lane in its group: a heading with the project
+   * and its machine is drawn above it. Separate fields keep the row memoized.
+   */
+  laneProject?: EnvironmentProject | null | undefined;
+  laneProjectName?: string | null | undefined;
+  laneMachineLabel?: string | null | undefined;
+  /** Shown instead of the branch: the thread that brought this one into its group. */
+  originLabel?: string | null | undefined;
   sortable?: SortableThreadRowBag | undefined;
   dropVerb: SidebarDropVerb | null;
   dragOverPinned: boolean;
@@ -944,6 +983,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isActive: props.isActive,
   });
 
+  // A lane's heading already names the project, so its rows lift the title
+  // into the project line and drop a line.
+  const titleOnTop = props.nested === true && props.groupLayout === "lanes";
   const title =
     isRenaming && canOperateThread ? (
       <input
@@ -1078,14 +1120,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     return (
       <li
         data-thread-item={threadKey}
+        data-group-tone={props.groupTone}
         {...sortableRootProps}
         {...(fileDropHandlers ?? {})}
         className={cn(
           "list-none [content-visibility:auto] [contain-intrinsic-size:auto_36px]",
-          props.nested && "ml-3 border-l border-border/70 pl-2",
+          props.nested &&
+            (props.groupLayout === "folder"
+              ? cn("mx-1 bg-(--group)/12 px-1", props.closesGroup && "mb-1 rounded-b-xl pb-1")
+              : "ml-3 border-l-2 border-(--group)/45 pl-2"),
           sortable?.isDragging && "relative z-20",
         )}
       >
+        {props.laneProjectName ? (
+          <SidebarGroupLaneHeading
+            project={props.laneProject ?? null}
+            projectName={props.laneProjectName}
+            machine={props.environmentMachine}
+            machineLabel={props.laneMachineLabel ?? null}
+          />
+        ) : null}
         <Tooltip disabled={sortable?.isDragging}>
           <TooltipTrigger
             render={
@@ -1238,14 +1292,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   return (
     <li
       data-thread-item={threadKey}
+      data-group-tone={props.groupTone}
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        props.nested && "ml-3 border-l border-border/70 pl-2",
+        props.nested &&
+          (props.groupLayout === "folder"
+            ? cn("mx-1 bg-(--group)/12 px-1", props.closesGroup && "mb-1 rounded-b-xl pb-1")
+            : "ml-3 border-l-2 border-(--group)/45 pl-2"),
         sortable?.isDragging && "relative z-20",
       )}
     >
+      {props.laneProjectName ? (
+        <SidebarGroupLaneHeading
+          project={props.laneProject ?? null}
+          projectName={props.laneProjectName}
+          machine={props.environmentMachine}
+          machineLabel={props.laneMachineLabel ?? null}
+        />
+      ) : null}
       <Tooltip disabled={snoozeMenuOpen || sortable?.isDragging}>
         <TooltipTrigger
           render={
@@ -1266,7 +1332,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           }
         >
           {accessibleTitle}
-          <div className="relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
+          <div
+            className={cn(
+              "relative z-10 px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
+              !titleOnTop && "h-[4.875rem]",
+            )}
+          >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
               {props.project ? (
@@ -1275,7 +1346,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {/* Left of the status slot, the pin would slide when hover swaps the
                 label for the wider row controls. */}
               {pinIndicator}
-              {props.projectDisplayName ? (
+              {titleOnTop ? (
+                title
+              ) : props.projectDisplayName ? (
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-secondary-label text-xs",
@@ -1427,16 +1500,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {props.sweepAction !== null ? dragDestination : null}
             </div>
-            <div className="mt-1 flex min-w-0">
-              {title}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  Regenerating title
-                </span>
-              ) : null}
-            </div>
+            {titleOnTop ? null : (
+              <div className="mt-1 flex min-w-0">
+                {title}
+                {isRegeneratingTitle ? (
+                  <span role="status" className="sr-only">
+                    Regenerating title
+                  </span>
+                ) : null}
+              </div>
+            )}
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
-              {thread.branch ? (
+              {props.originLabel ? (
+                <span className="min-w-0 flex-1 truncate text-muted-foreground/70">
+                  ↳ from {props.originLabel}
+                </span>
+              ) : thread.branch ? (
                 <>
                   <ThreadWorktreeIndicator thread={thread} />
                   <span className="flex min-w-0 flex-1 text-muted-foreground/40">

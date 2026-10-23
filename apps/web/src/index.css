@@ -2477,3 +2477,21 @@ code {
     }
   }
 }
+
+/* Thread group colours. A group's rows carry data-group-tone (from its id) and
+   read --group, so the pill, rail and folder of one group always match. */
+[data-group-tone="0"] {
+  --group: var(--color-violet-500);
+}
+[data-group-tone="1"] {
+  --group: var(--color-amber-500);
+}
+[data-group-tone="2"] {
+  --group: var(--color-teal-500);
+}
+[data-group-tone="3"] {
+  --group: var(--color-rose-500);
+}
+[data-group-tone="4"] {
+  --group: var(--color-sky-500);
+}

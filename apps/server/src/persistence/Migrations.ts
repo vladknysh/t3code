@@ -73,6 +73,7 @@ import Migration0067 from "./Migrations/067_WebhookDedupe.ts";
 import Migration0068 from "./Migrations/068_PeerLinks.ts";
 import Migration0069 from "./Migrations/069_ThreadGroups.ts";
 import Migration0070 from "./Migrations/070_ThreadGroupSessions.ts";
+import Migration0071 from "./Migrations/071_ThreadGroupMemberOrigin.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -146,6 +147,7 @@ const migrationEntries = [
   [68, "PeerLinks", Migration0068],
   [69, "ThreadGroups", Migration0069],
   [70, "ThreadGroupSessions", Migration0070],
+  [71, "ThreadGroupMemberOrigin", Migration0071],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

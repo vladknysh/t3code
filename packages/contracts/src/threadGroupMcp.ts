@@ -6,7 +6,7 @@ import {
   OrchestratorMcpThreadStatus,
 } from "./orchestratorMcp.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { ThreadGroup, ThreadGroupId, ThreadGroupTitle } from "./threadGroup.ts";
+import { ThreadGroup, ThreadGroupId, ThreadGroupMember, ThreadGroupTitle } from "./threadGroup.ts";
 
 export const ThreadGroupMcpListInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
@@ -89,6 +89,8 @@ export const ThreadGroupMcpMemberInfo = Schema.Struct({
   environmentId: EnvironmentId,
   environmentLabel: Schema.NullOr(Schema.String),
   threadId: ThreadId,
+  /** The agent thread that brought this member in, such as one that launched it. */
+  from: Schema.NullOr(ThreadGroupMember),
   /** Null when the member could not be read; `unavailable` says why. */
   thread: Schema.NullOr(
     Schema.Struct({
