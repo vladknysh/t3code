@@ -52,6 +52,9 @@ export type T3McpToolSummaryAction =
   | "environment-read"
   | "environment-links"
   | "environment-update"
+  | "group-list"
+  | "group-update"
+  | "group-info"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -314,6 +317,9 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["List", "Listing", "Listed", "linked environments"],
     "environment-links",
   ),
+  t3_group_list: tool(["List", "Listing", "Listed", "thread groups"], "group-list"),
+  t3_group_update: tool(["Update", "Updating", "Updated", "a thread group"], "group-update"),
+  t3_group_info: tool(["Read", "Reading", "Read", "a thread group"], "group-info"),
   t3_environment_preferences_update: tool(
     ["Update", "Updating", "Updated", "environment preferences"],
     "environment-update",
