@@ -22,7 +22,8 @@ export type ThreadGroupMember = typeof ThreadGroupMember.Type;
 /**
  * Threads gathered under one name, like a browser tab group. Only the
  * membership is stored: status, settlement and icons come from the member
- * threads themselves, wherever they live.
+ * threads themselves, wherever they live. A group always has members: one
+ * that loses its last member is deleted.
  */
 export const ThreadGroup = Schema.Struct({
   id: ThreadGroupId,
@@ -38,7 +39,7 @@ export type ThreadGroupListResult = typeof ThreadGroupListResult.Type;
 
 export const ThreadGroupCreateInput = Schema.Struct({
   title: ThreadGroupTitle,
-  members: Schema.Array(ThreadGroupMember),
+  members: Schema.Array(ThreadGroupMember).check(Schema.isMinLength(1)),
 });
 export type ThreadGroupCreateInput = typeof ThreadGroupCreateInput.Type;
 
@@ -58,7 +59,10 @@ export const ThreadGroupUpdateInput = Schema.Union([
 ]);
 export type ThreadGroupUpdateInput = typeof ThreadGroupUpdateInput.Type;
 
-/** The group as stored after the change, or null once it was deleted. */
+/**
+ * The group as stored after the change, or null once it is gone: deleted, or
+ * emptied by removing its last member. Deleting a missing group succeeds.
+ */
 export const ThreadGroupUpdateResult = Schema.Struct({ group: Schema.NullOr(ThreadGroup) });
 export type ThreadGroupUpdateResult = typeof ThreadGroupUpdateResult.Type;
 
@@ -76,11 +80,13 @@ export class ThreadGroupStorageError extends Schema.TaggedError<ThreadGroupStora
   {
     operation: Schema.Literals([
       "list",
+      "get",
       "create",
       "rename",
       "add-members",
       "remove-members",
       "delete",
+      "forget-thread",
     ]),
     cause: Schema.Defect(),
   },

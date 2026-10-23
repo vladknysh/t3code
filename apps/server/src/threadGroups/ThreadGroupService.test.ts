@@ -1,7 +1,6 @@
 import { EnvironmentId, ThreadGroupId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -95,16 +94,65 @@ it.layer(layer)("ThreadGroupService", (it) => {
     Effect.gen(function* () {
       const groups = yield* ThreadGroups.ThreadGroupService;
       const missing = ThreadGroupId.make("missing");
-      const exit = yield* groups
+      const error = yield* groups
         .update({ _tag: "add-members", groupId: missing, members: [member(here, "x")] })
-        .pipe(Effect.exit);
-      assert.isTrue(Exit.isFailure(exit));
-      if (Exit.isFailure(exit)) {
-        assert.include(String(exit.cause), "ThreadGroupNotFoundError");
-      }
+        .pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ThreadGroupNotFoundError");
       // Nothing was written for the missing group.
       const { groups: all } = yield* groups.list;
       assert.isFalse(all.some((group) => group.members.some((entry) => entry.threadId === "x")));
+    }),
+  );
+
+  it.effect("puts moved members after existing ones, in the order given", () =>
+    Effect.gen(function* () {
+      const groups = yield* ThreadGroups.ThreadGroupService;
+      yield* create("source", [member(here, "moved"), member(here, "left")]);
+      const target = yield* create("target", [member(here, "first")]);
+      const { group } = yield* groups.update({
+        _tag: "add-members",
+        groupId: target.id,
+        members: [member(there, "fresh"), member(here, "moved")],
+      });
+      assert.deepStrictEqual(
+        group?.members.map((entry) => entry.threadId),
+        ["first", "fresh", "moved"],
+      );
+    }),
+  );
+
+  it.effect("deletes a group once it has no members left", () =>
+    Effect.gen(function* () {
+      const groups = yield* ThreadGroups.ThreadGroupService;
+      const emptiedByMove = yield* create("emptied by move", [member(here, "solo")]);
+      yield* create("takes it", [member(here, "solo")]);
+      const emptiedByRemove = yield* create("emptied by remove", [member(there, "last")]);
+      const { group } = yield* groups.update({
+        _tag: "remove-members",
+        groupId: emptiedByRemove.id,
+        members: [member(there, "last")],
+      });
+      assert.isNull(group);
+      const { groups: all } = yield* groups.list;
+      const ids = all.map((entry) => entry.id);
+      assert.notInclude(ids, emptiedByMove.id);
+      assert.notInclude(ids, emptiedByRemove.id);
+    }),
+  );
+
+  it.effect("forgets a deleted thread, and its group when it was the last member", () =>
+    Effect.gen(function* () {
+      const groups = yield* ThreadGroups.ThreadGroupService;
+      const pair = yield* create("pair", [member(here, "gone"), member(here, "kept")]);
+      const single = yield* create("single", [member(here, "alone")]);
+      yield* groups.forgetThread(member(here, "gone"));
+      yield* groups.forgetThread(member(here, "alone"));
+      assert.deepStrictEqual(
+        (yield* groups.get(pair.id)).members.map((entry) => entry.threadId),
+        ["kept"],
+      );
+      const missing = yield* groups.get(single.id).pipe(Effect.flip);
+      assert.strictEqual(missing._tag, "ThreadGroupNotFoundError");
     }),
   );
 

@@ -5,10 +5,10 @@ import {
   ThreadGroupId,
   type ThreadGroupListResult,
   type ThreadGroupMember,
-  type ThreadGroupUpdateInput,
-  type ThreadGroupUpdateResult,
   ThreadGroupNotFoundError,
   ThreadGroupStorageError,
+  type ThreadGroupUpdateInput,
+  type ThreadGroupUpdateResult,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -20,6 +20,9 @@ import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
+
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 
 type StorageOperation = ThreadGroupStorageError["operation"];
 
@@ -39,12 +42,16 @@ export class ThreadGroupService extends Context.Service<
     ) => Effect.Effect<ThreadGroup, ThreadGroupNotFoundError | ThreadGroupStorageError>;
     /**
      * Applies one change. A thread belongs to at most one group here, so
-     * adding a member that is in another group moves it. Deleting ungroups:
-     * the member threads stay as they are.
+     * adding a member that is in another group moves it. A group left without
+     * members is deleted. Deleting ungroups: the member threads stay as they are.
      */
     readonly update: (
       input: ThreadGroupUpdateInput,
     ) => Effect.Effect<ThreadGroupUpdateResult, ThreadGroupNotFoundError | ThreadGroupStorageError>;
+    /** Drops a thread that no longer exists from whichever group holds it. */
+    readonly forgetThread: (
+      member: ThreadGroupMember,
+    ) => Effect.Effect<void, ThreadGroupStorageError>;
   }
 >()("t3/threadGroups/ThreadGroupService") {}
 
@@ -74,6 +81,8 @@ const make = Effect.gen(function* () {
   const storage = (operation: StorageOperation) =>
     Effect.mapError((cause: unknown) => new ThreadGroupStorageError({ operation, cause }));
 
+  const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+
   const toGroups = (
     groups: ReadonlyArray<GroupRow>,
     members: ReadonlyArray<MemberRow>,
@@ -91,29 +100,33 @@ const make = Effect.gen(function* () {
         })),
     }));
 
-  const readAll = Effect.gen(function* () {
-    const groups = yield* sql<GroupRow>`
-      SELECT group_id, title, created_at, updated_at FROM thread_groups
-      ORDER BY created_at, group_id
-    `;
-    const members = yield* sql<MemberRow>`
-      SELECT group_id, environment_id, thread_id FROM thread_group_members
-      ORDER BY added_at, rowid
-    `;
-    return toGroups(groups, members);
-  });
+  // Each list is read in one transaction, so a change committing between the
+  // two queries cannot pair a group with another moment's members.
+  const readAll = sql.withTransaction(
+    Effect.gen(function* () {
+      const groups = yield* sql<GroupRow>`
+        SELECT group_id, title, created_at, updated_at FROM thread_groups
+        ORDER BY created_at, group_id
+      `;
+      const members = yield* sql<MemberRow>`
+        SELECT group_id, environment_id, thread_id FROM thread_group_members
+        ORDER BY added_at, rowid
+      `;
+      return toGroups(groups, members);
+    }),
+  );
 
   // Helpers below run inside an operation's own span, so they add none.
   const readOne = Effect.fnUntraced(function* (groupId: ThreadGroupId) {
     const groups = yield* sql<GroupRow>`
-        SELECT group_id, title, created_at, updated_at FROM thread_groups
-        WHERE group_id = ${groupId}
-      `;
+      SELECT group_id, title, created_at, updated_at FROM thread_groups
+      WHERE group_id = ${groupId}
+    `;
     const members = yield* sql<MemberRow>`
-        SELECT group_id, environment_id, thread_id FROM thread_group_members
-        WHERE group_id = ${groupId}
-        ORDER BY added_at, rowid
-      `;
+      SELECT group_id, environment_id, thread_id FROM thread_group_members
+      WHERE group_id = ${groupId}
+      ORDER BY added_at, rowid
+    `;
     return toGroups(groups, members)[0];
   });
 
@@ -122,47 +135,74 @@ const make = Effect.gen(function* () {
       SELECT group_id FROM thread_groups WHERE group_id = ${groupId}
     `.pipe(Effect.map((rows) => rows.length > 0));
 
-  const insertMembers = (
+  /** Takes the thread out of any other group, which then counts as changed. */
+  const leaveOtherGroups = Effect.fnUntraced(function* (
+    member: ThreadGroupMember,
+    groupId: ThreadGroupId | null,
+    at: string,
+  ) {
+    yield* sql`
+      UPDATE thread_groups SET updated_at = ${at}
+      WHERE group_id IN (
+        SELECT group_id FROM thread_group_members
+        WHERE environment_id = ${member.environmentId} AND thread_id = ${member.threadId}
+      ) AND group_id IS NOT ${groupId}
+    `;
+    yield* sql`
+      DELETE FROM thread_group_members
+      WHERE environment_id = ${member.environmentId} AND thread_id = ${member.threadId}
+        AND group_id IS NOT ${groupId}
+    `;
+  });
+
+  // A moved member is deleted and inserted again rather than updated, so its
+  // new rowid puts it after the members already there, in the order given.
+  const addMembers = Effect.fnUntraced(function* (
     groupId: ThreadGroupId,
     members: ReadonlyArray<ThreadGroupMember>,
-    addedAt: string,
-  ) =>
-    Effect.forEach(
-      members,
-      (member) => sql`
+    at: string,
+  ) {
+    for (const member of members) {
+      yield* leaveOtherGroups(member, groupId, at);
+      yield* sql`
         INSERT INTO thread_group_members (group_id, environment_id, thread_id, added_at)
-        VALUES (${groupId}, ${member.environmentId}, ${member.threadId}, ${addedAt})
-        ON CONFLICT (environment_id, thread_id) DO UPDATE SET
-          group_id = excluded.group_id,
-          added_at = excluded.added_at
-        WHERE thread_group_members.group_id <> excluded.group_id
-      `,
-      { discard: true },
-    );
+        VALUES (${groupId}, ${member.environmentId}, ${member.threadId}, ${at})
+        ON CONFLICT (environment_id, thread_id) DO NOTHING
+      `;
+    }
+  });
+
+  const dropEmptyGroups = sql`
+    DELETE FROM thread_groups
+    WHERE NOT EXISTS (
+      SELECT 1 FROM thread_group_members WHERE group_id = thread_groups.group_id
+    )
+  `;
 
   /**
    * Runs `change` on an existing group in one transaction, tells subscribers,
-   * and returns the group as stored.
+   * and returns the group as stored, or null when the change emptied it.
    */
   const mutate = Effect.fnUntraced(function* <R>(
     operation: StorageOperation,
     groupId: ThreadGroupId,
-    change: (updatedAt: string) => Effect.Effect<unknown, SqlError.SqlError, R>,
+    change: (at: string) => Effect.Effect<unknown, SqlError.SqlError, R>,
   ) {
-    const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    const group = yield* sql
+    const at = yield* now;
+    const outcome = yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          if (!(yield* groupExists(groupId))) return undefined;
-          yield* change(updatedAt);
-          yield* sql`UPDATE thread_groups SET updated_at = ${updatedAt} WHERE group_id = ${groupId}`;
-          return yield* readOne(groupId);
+          if (!(yield* groupExists(groupId))) return { found: false as const };
+          yield* change(at);
+          yield* sql`UPDATE thread_groups SET updated_at = ${at} WHERE group_id = ${groupId}`;
+          yield* dropEmptyGroups;
+          return { found: true as const, group: (yield* readOne(groupId)) ?? null };
         }),
       )
       .pipe(storage(operation));
-    if (group === undefined) return yield* new ThreadGroupNotFoundError({ groupId });
+    if (!outcome.found) return yield* new ThreadGroupNotFoundError({ groupId });
     yield* PubSub.publish(changes, undefined);
-    return group;
+    return outcome.group;
   });
 
   const list: ThreadGroupService["Service"]["list"] = readAll.pipe(
@@ -184,7 +224,7 @@ const make = Effect.gen(function* () {
 
   const get: ThreadGroupService["Service"]["get"] = Effect.fn("ThreadGroupService.get")(
     function* (groupId) {
-      const group = yield* readOne(groupId).pipe(storage("list"));
+      const group = yield* readOne(groupId).pipe(storage("get"));
       if (group === undefined) return yield* new ThreadGroupNotFoundError({ groupId });
       return group;
     },
@@ -195,22 +235,22 @@ const make = Effect.gen(function* () {
     readonly members: ReadonlyArray<ThreadGroupMember>;
   }) {
     const groupId = ThreadGroupId.make(yield* crypto.randomUUIDv4().pipe(storage("create")));
-    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    const at = yield* now;
     const group = yield* sql
       .withTransaction(
         Effect.gen(function* () {
           yield* sql`
-              INSERT INTO thread_groups (group_id, title, created_at, updated_at)
-              VALUES (${groupId}, ${input.title}, ${createdAt}, ${createdAt})
-            `;
-          yield* insertMembers(groupId, input.members, createdAt);
-          return yield* readOne(groupId);
+            INSERT INTO thread_groups (group_id, title, created_at, updated_at)
+            VALUES (${groupId}, ${input.title}, ${at}, ${at})
+          `;
+          yield* addMembers(groupId, input.members, at);
+          yield* dropEmptyGroups;
+          return (yield* readOne(groupId)) ?? null;
         }),
       )
       .pipe(storage("create"));
     yield* PubSub.publish(changes, undefined);
-    // The insert above ran in the same transaction, so the group is there.
-    return group!;
+    return group;
   });
 
   const rename = Effect.fn("ThreadGroupService.rename")(function* (input: {
@@ -224,15 +264,13 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const addMembers = Effect.fn("ThreadGroupService.addMembers")(function* (input: MembersChange) {
-    return yield* mutate("add-members", input.groupId, (updatedAt) =>
-      insertMembers(input.groupId, input.members, updatedAt),
+  const add = Effect.fn("ThreadGroupService.addMembers")(function* (input: MembersChange) {
+    return yield* mutate("add-members", input.groupId, (at) =>
+      addMembers(input.groupId, input.members, at),
     );
   });
 
-  const removeMembers = Effect.fn("ThreadGroupService.removeMembers")(function* (
-    input: MembersChange,
-  ) {
+  const remove = Effect.fn("ThreadGroupService.removeMembers")(function* (input: MembersChange) {
     return yield* mutate("remove-members", input.groupId, () =>
       Effect.forEach(
         input.members,
@@ -268,15 +306,63 @@ const make = Effect.gen(function* () {
       case "rename":
         return rename(input).pipe(Effect.map((group) => ({ group })));
       case "add-members":
-        return addMembers(input).pipe(Effect.map((group) => ({ group })));
+        return add(input).pipe(Effect.map((group) => ({ group })));
       case "remove-members":
-        return removeMembers(input).pipe(Effect.map((group) => ({ group })));
+        return remove(input).pipe(Effect.map((group) => ({ group })));
       case "delete":
         return deleteGroup(input.groupId).pipe(Effect.as({ group: null }));
     }
   };
 
-  return ThreadGroupService.of({ list, subscribe, get, update });
+  const forgetThread: ThreadGroupService["Service"]["forgetThread"] = Effect.fn(
+    "ThreadGroupService.forgetThread",
+  )(function* (member) {
+    const at = yield* now;
+    const removed = yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const held = yield* sql<{ readonly group_id: string }>`
+            SELECT group_id FROM thread_group_members
+            WHERE environment_id = ${member.environmentId} AND thread_id = ${member.threadId}
+          `;
+          if (held.length === 0) return false;
+          yield* leaveOtherGroups(member, null, at);
+          yield* dropEmptyGroups;
+          return true;
+        }),
+      )
+      .pipe(storage("forget-thread"));
+    if (removed) yield* PubSub.publish(changes, undefined);
+  });
+
+  return ThreadGroupService.of({ list, subscribe, get, update, forgetThread });
 });
 
 export const layer = Layer.effect(ThreadGroupService, make);
+
+/**
+ * Drops threads deleted here from their groups. Threads on other environments
+ * cannot be watched from here; clients and agents skip members they cannot
+ * find, and removing one cleans it up.
+ */
+export const layerForgetDeletedThreads = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const groups = yield* ThreadGroupService;
+    const engine = yield* Orchestrator.OrchestratorV2;
+    const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
+    yield* engine.streamDomainEvents.pipe(
+      Stream.filter((event) => event.type === "thread.deleted"),
+      Stream.runForEach((event) =>
+        groups
+          .forgetThread({ environmentId, threadId: event.threadId })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not drop a deleted thread from its group", cause),
+            ),
+          ),
+      ),
+      Effect.catchCause((cause) => Effect.logWarning("Thread group deletion watch stopped", cause)),
+      Effect.forkScoped,
+    );
+  }),
+);

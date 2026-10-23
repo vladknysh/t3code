@@ -367,7 +367,10 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLaunchProvided,
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
-  ThreadGroups.layer,
+  ThreadGroups.layerForgetDeletedThreads.pipe(
+    Layer.provideMerge(ThreadGroups.layer),
+    Layer.provide(layerOrchestratorProvided),
+  ),
   layerSecretRequestsProvided,
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(
