@@ -453,9 +453,9 @@ function useSidebarThreads(input: {
     // sits where its working member would. The row's own Working label reads
     // live shells; these quiet ones hold still while a run streams.
     isWorking: isSidebarThreadWorking,
-    isSettled: (thread) =>
-      serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true &&
-      thread.settledOverride === "settled",
+    isSettled: (thread) => thread.settledOverride === "settled",
+    canSettle: (thread) =>
+      serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true,
     workingShelfEnabled,
   });
   const ungrouped = (list: readonly EnvironmentThreadShell[]) =>
@@ -496,11 +496,24 @@ function useSidebarThreads(input: {
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
   // A collapsed shelf hides its groups as it hides its threads.
+  // A collapsed shelf hides its groups, and a collapsed group its members, as
+  // a collapsed shelf hides its threads: except the open thread, which stays.
   const shelfOpen = { active: true, working: workingShelfExpanded, settled: settledShelfExpanded };
-  const visibleGroups = grouping.views.filter((view) => shelfOpen[view.section]);
+  const routeGroupKey =
+    routeRowThreadKey === null ? undefined : grouping.groupKeyByThreadKey.get(routeRowThreadKey);
+  const visibleGroups = grouping.views
+    .filter((view) => shelfOpen[view.section] || view.key === routeGroupKey)
+    .map((view) => ({
+      view,
+      shownMembers: !collapsedGroupKeys.has(view.key)
+        ? view.members
+        : view.key === routeGroupKey
+          ? view.members.filter((thread) => threadShellKey(thread) === routeRowThreadKey)
+          : EMPTY_THREADS,
+    }));
   const expandedMembers = (section: SidebarThreadGroupSection) =>
-    visibleGroups.flatMap((view) =>
-      view.section === section && !collapsedGroupKeys.has(view.key) ? view.members : [],
+    visibleGroups.flatMap(({ view, shownMembers }) =>
+      view.section === section ? shownMembers : EMPTY_THREADS,
     );
   const orderedThreads = [
     ...pinnedThreads,
@@ -515,6 +528,21 @@ function useSidebarThreads(input: {
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const view of grouping.views) {
     for (const thread of view.members) sectionByThreadKey.set(threadShellKey(thread), view.section);
+  }
+  // A member's row offers its own thread's actions (Un-settle, Wake), not the
+  // group's: a settled member can sit in an active group.
+  const memberSectionByKey = new Map<string, SidebarSection>();
+  for (const [list, section] of [
+    [ungroupedPartition.pinnedThreads, "pinned"],
+    [ungroupedPartition.activeThreads, "active"],
+    [ungroupedPartition.workingThreads, "working"],
+    [ungroupedPartition.snoozedThreads, "snoozed"],
+    [ungroupedPartition.settledThreads, "settled"],
+  ] as const) {
+    for (const thread of list) {
+      const key = threadShellKey(thread);
+      if (grouping.groupKeyByThreadKey.has(key)) memberSectionByKey.set(key, section);
+    }
   }
   for (const [list, section] of [
     [pinnedThreads, "pinned"],
@@ -553,6 +581,7 @@ function useSidebarThreads(input: {
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
     groupViews: grouping.views,
     visibleGroups,
+    memberSectionByKey,
     groupKeyByThreadKey: grouping.groupKeyByThreadKey,
     collapsedGroupKeys,
     toggleGroupCollapsed: (groupKey: string) =>
@@ -1136,6 +1165,7 @@ export default function Sidebar() {
     routeRowThreadKey,
     groupViews,
     visibleGroups,
+    memberSectionByKey,
     groupKeyByThreadKey,
     collapsedGroupKeys,
     toggleGroupCollapsed,
@@ -1430,11 +1460,22 @@ export default function Sidebar() {
       }
     })();
   };
-  const groupActions = useThreadGroupActions({ primaryEnvironmentId, serverConfigs });
   const groupViewByKey = new Map(groupViews.map((view) => [view.key, view] as const));
   const groupViewByKeyRef = useRef(groupViewByKey);
   useEffect(() => {
     groupViewByKeyRef.current = groupViewByKey;
+  });
+  const groupActions = useThreadGroupActions({
+    primaryEnvironmentId,
+    serverConfigs,
+    groupOf: (thread) => {
+      const view = groupViewByKeyRef.current.get(
+        groupKeyByThreadKeyRef.current.get(threadShellKey(thread)) ?? "",
+      );
+      return view === undefined
+        ? null
+        : { environmentId: view.environmentId, groupId: view.group.id };
+    },
   });
   const [renamingGroupKey, setRenamingGroupKey] = useState<string | null>(null);
   const [renamingGroupTitle, setRenamingGroupTitle] = useState("");
@@ -1779,10 +1820,14 @@ export default function Sidebar() {
     })();
   };
 
+  // A group's member supplies chat context but never moves in the list, as a
+  // Working row does, so its drags count as Working.
+  const dragSectionOf = (key: string): SidebarSection | undefined =>
+    groupKeyByThreadKey.has(key) ? "working" : sectionByThreadKey.get(key);
   const handleThreadDragStart = (event: DragStartEvent) => {
     const activeKey = String(event.active.id);
     contextDragKeyRef.current = activeKey;
-    const activeSection = sectionByThreadKey.get(activeKey);
+    const activeSection = dragSectionOf(activeKey);
     if (activeSection === undefined) return;
     listMotionRef.current?.suspend();
     const list = threadListRef.current;
@@ -1818,18 +1863,16 @@ export default function Sidebar() {
       });
     // A group's row, then its members unless it is collapsed.
     const groupRowsOf = (section: SidebarThreadGroupSection): SidebarListItem[] =>
-      visibleGroups.flatMap((view): SidebarListItem[] =>
+      visibleGroups.flatMap(({ view, shownMembers }): SidebarListItem[] =>
         view.section !== section
           ? []
           : [
               { kind: "group", key: view.key, section },
-              ...(collapsedGroupKeys.has(view.key)
-                ? []
-                : view.members.map((thread): SidebarListItem => ({
-                    kind: "member",
-                    key: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                    section,
-                  }))),
+              ...shownMembers.map((thread): SidebarListItem => ({
+                kind: "member",
+                key: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                section,
+              })),
             ],
       );
     if (
@@ -1984,7 +2027,7 @@ export default function Sidebar() {
   })();
   const handleThreadDragEnd = (event: DragEndEvent) => {
     const activeKey = String(event.active.id);
-    const activeSection = sectionByThreadKey.get(activeKey);
+    const activeSection = dragSectionOf(activeKey);
     const target =
       event.over === null
         ? null
@@ -3164,24 +3207,27 @@ export default function Sidebar() {
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
                         const rowVariant = isCard ? "card" : "slim";
+                        // Placement follows the group; actions follow the thread.
+                        const ownSection = nested
+                          ? (memberSectionByKey.get(threadKey) ?? section)
+                          : section;
                         return (
                           <SortableThreadRow
                             key={threadKey}
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
                             sortableDisabled={
-                              nested ||
                               renamingThreadKey === threadKey ||
-                              !draggableThreadKeys.has(threadKey) ||
+                              (!nested && !draggableThreadKeys.has(threadKey)) ||
                               optimisticDrop !== null
                             }
                             nested={nested}
                             thread={thread}
                             variant={rowVariant}
                             variantAction={
-                              section === "snoozed"
+                              ownSection === "snoozed"
                                 ? "unsnooze"
-                                : section === "settled"
+                                : ownSection === "settled"
                                   ? "unsettle"
                                   : "settle"
                             }
@@ -3210,7 +3256,7 @@ export default function Sidebar() {
                               actionSweep?.keys.has(threadKey) ? actionSweep.action : null
                             }
                             snoozeWakeLabelText={
-                              section === "snoozed" && thread.snoozedUntil != null
+                              ownSection === "snoozed" && thread.snoozedUntil != null
                                 ? snoozeWakeLabel(thread.snoozedUntil, {
                                     now: new Date().toISOString(),
                                   })

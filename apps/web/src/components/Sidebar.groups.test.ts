@@ -12,6 +12,7 @@ interface Thread {
   readonly id: ThreadId;
   readonly working?: boolean;
   readonly settled?: boolean;
+  readonly cannotSettle?: boolean;
 }
 
 const thread = (environmentId: EnvironmentId, id: string, state: Partial<Thread> = {}): Thread => ({
@@ -45,6 +46,7 @@ const resolve = (
     threads,
     isWorking: (candidate) => candidate.working === true,
     isSettled: (candidate) => candidate.settled === true,
+    canSettle: (candidate) => candidate.cannotSettle !== true,
     workingShelfEnabled: options.workingShelfEnabled ?? true,
   });
 
@@ -73,6 +75,13 @@ describe("resolveSidebarThreadGroups", () => {
     expect(resolve([group("g", [api, settledWeb])], [api, settledWeb]).views[0]?.section).toBe(
       "settled",
     );
+  });
+
+  it("ignores members whose environment cannot settle, unless no member can", () => {
+    const api = thread(mini, "api", { settled: true });
+    const old = thread(laptop, "old-server", { cannotSettle: true });
+    expect(resolve([group("g", [api, old])], [api, old]).views[0]?.section).toBe("settled");
+    expect(resolve([group("g", [old])], [old]).views[0]?.section).toBe("active");
   });
 
   it("leaves out members it cannot show and hides groups left empty", () => {

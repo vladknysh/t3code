@@ -2,7 +2,7 @@ import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { CheckIcon, ChevronRightIcon, CircleDashedIcon, LayersIcon, Undo2Icon } from "lucide-react";
-import { memo, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useEffect, useRef, type KeyboardEvent, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { animateSidebarLayoutChanges, type SidebarSection } from "../Sidebar.logic";
@@ -64,17 +64,17 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
     props.onContextMenu(props.groupKey, { x: event.clientX, y: event.clientY });
   };
   const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.target !== event.currentTarget) return;
-    if (event.key === "Enter") {
-      event.preventDefault();
-      props.onOpen(props.groupKey);
-    } else if (event.key === "ArrowLeft" && !props.collapsed) {
+    if (event.key === "ArrowLeft" && !props.collapsed) {
       props.onToggleCollapsed(props.groupKey);
     } else if (event.key === "ArrowRight" && props.collapsed) {
       props.onToggleCollapsed(props.groupKey);
     }
   };
-  const stop = (event: MouseEvent) => event.stopPropagation();
+  // Enter and Escape end the rename; the blur that follows must not commit again.
+  const renameEnded = useRef(false);
+  useEffect(() => {
+    if (props.isRenaming) renameEnded.current = false;
+  }, [props.isRenaming]);
   return (
     <li
       ref={setNodeRef}
@@ -88,17 +88,10 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
       className="list-none py-0.5"
     >
       <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={!props.collapsed}
-        aria-label={`Group ${props.title}, ${props.memberCount} threads`}
-        aria-current={props.isActive ? "page" : undefined}
         data-testid="sidebar-thread-group"
-        onClick={() => props.onOpen(props.groupKey)}
-        onKeyDown={handleKeyDown}
         onContextMenu={handleContextMenu}
         className={cn(
-          "group/sidebar-group relative w-full cursor-pointer rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          "group/sidebar-group relative w-full rounded-md text-left select-none has-[button[data-group-title]:focus-visible]:ring-2 has-[button[data-group-title]:focus-visible]:ring-inset has-[button[data-group-title]:focus-visible]:ring-ring",
           props.isActive
             ? "bg-sidebar-row-active text-sidebar-foreground"
             : "text-sidebar-foreground hover:bg-sidebar-row-hover",
@@ -109,12 +102,10 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
           <div className="flex h-5 min-w-0 items-center gap-1.5">
             <button
               type="button"
+              aria-expanded={!props.collapsed}
               aria-label={props.collapsed ? "Expand group" : "Collapse group"}
-              onClick={(event) => {
-                stop(event);
-                props.onToggleCollapsed(props.groupKey);
-              }}
-              className="-ml-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-sidebar-row-hover hover:text-foreground"
+              onClick={() => props.onToggleCollapsed(props.groupKey)}
+              className="relative z-10 -ml-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-sidebar-row-hover hover:text-foreground"
             >
               <ChevronRightIcon
                 aria-hidden
@@ -126,20 +117,40 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
               <input
                 autoFocus
                 aria-label="Group name"
+                maxLength={128}
                 value={props.renamingTitle}
-                onClick={stop}
                 onChange={(event) => props.onRenameTitleChange(event.target.value)}
-                onBlur={() => props.onCommitRename(props.groupKey, props.renamingTitle)}
+                onBlur={() => {
+                  if (!renameEnded.current)
+                    props.onCommitRename(props.groupKey, props.renamingTitle);
+                }}
                 onKeyDown={(event) => {
                   event.stopPropagation();
-                  if (event.key === "Enter")
+                  if (event.nativeEvent.isComposing) return;
+                  if (event.key === "Enter") {
+                    renameEnded.current = true;
                     props.onCommitRename(props.groupKey, props.renamingTitle);
-                  else if (event.key === "Escape") props.onCancelRename();
+                  } else if (event.key === "Escape") {
+                    renameEnded.current = true;
+                    props.onCancelRename();
+                  }
                 }}
-                className="min-w-0 flex-1 rounded-sm bg-background px-1 text-sm outline-none ring-1 ring-ring"
+                className="relative z-10 min-w-0 flex-1 rounded-sm bg-background px-1 text-sm outline-none ring-1 ring-ring"
               />
             ) : (
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">{props.title}</span>
+              // The title button covers the whole card (its ::after), so a click
+              // anywhere outside the other buttons opens the group session.
+              <button
+                type="button"
+                data-group-title
+                aria-current={props.isActive ? "page" : undefined}
+                aria-label={`Open group ${props.title}, ${props.memberCount} threads`}
+                onClick={() => props.onOpen(props.groupKey)}
+                onKeyDown={handleKeyDown}
+                className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm font-medium outline-none after:absolute after:inset-0 after:content-['']"
+              >
+                {props.title}
+              </button>
             )}
             <span className="relative ml-auto flex h-5 shrink-0 items-center justify-end text-xs">
               <span
@@ -162,12 +173,11 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
                       <button
                         type="button"
                         aria-label={settled ? "Un-settle group" : "Settle group"}
-                        onClick={(event) => {
-                          stop(event);
+                        onClick={() => {
                           if (settled) props.onUnsettle(props.groupKey);
                           else props.onSettle(props.groupKey);
                         }}
-                        className="pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:static focus-visible:opacity-100 group-hover/sidebar-group:pointer-events-auto group-hover/sidebar-group:static group-hover/sidebar-group:opacity-100"
+                        className="pointer-events-none absolute inset-y-0 right-0 z-10 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:static focus-visible:opacity-100 group-hover/sidebar-group:pointer-events-auto group-hover/sidebar-group:static group-hover/sidebar-group:opacity-100"
                       />
                     }
                   >
@@ -191,7 +201,7 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
             <span className="min-w-0 flex-1 truncate text-muted-foreground/60">
               {props.memberCount === 1 ? "1 thread" : `${props.memberCount} threads`}
             </span>
-            <span className="inline-flex shrink-0 items-center gap-1.5">
+            <span className="relative z-10 inline-flex shrink-0 items-center gap-1.5">
               {props.environments.map((environment) => (
                 <Tooltip key={environment.environmentId}>
                   <TooltipTrigger

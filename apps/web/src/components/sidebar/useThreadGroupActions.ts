@@ -32,6 +32,10 @@ const memberOf = (thread: GroupedThread): ThreadGroupMember => ({
 export function useThreadGroupActions(input: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
+  /** The group a thread is shown under now, wherever it is stored. */
+  readonly groupOf: (
+    thread: GroupedThread,
+  ) => { readonly environmentId: EnvironmentId; readonly groupId: ThreadGroupId } | null;
 }) {
   const update = useAtomCommand(serverEnvironment.updateThreadGroup, {
     label: "thread group update",
@@ -52,6 +56,26 @@ export function useThreadGroupActions(input: {
     return result._tag === "Success" ? result.value : null;
   };
 
+  /**
+   * An environment moves a thread between its own groups by itself; a group
+   * stored elsewhere has to let go of it first, or the thread shows in both.
+   */
+  const leaveGroupsElsewhere = (home: EnvironmentId, threads: readonly GroupedThread[]) =>
+    Promise.all(
+      threads.flatMap((thread) => {
+        const current = input.groupOf(thread);
+        return current === null || current.environmentId === home
+          ? []
+          : [
+              run(current.environmentId, {
+                _tag: "remove-members",
+                groupId: current.groupId,
+                members: [memberOf(thread)],
+              }),
+            ];
+      }),
+    );
+
   /** Where a new group for these threads is stored, or null when nowhere can. */
   const homeFor = (threads: readonly GroupedThread[]): EnvironmentId | null => {
     if (input.primaryEnvironmentId !== null && supportsGroups(input.primaryEnvironmentId)) {
@@ -65,14 +89,18 @@ export function useThreadGroupActions(input: {
     create: (threads: readonly GroupedThread[]) => {
       const home = homeFor(threads);
       if (home === null || threads.length === 0) return Promise.resolve(null);
-      return run(home, {
-        _tag: "create",
-        title: defaultThreadGroupTitle(threads.map((thread) => thread.title)),
-        members: threads.map(memberOf),
-      });
+      return leaveGroupsElsewhere(home, threads).then(() =>
+        run(home, {
+          _tag: "create",
+          title: defaultThreadGroupTitle(threads.map((thread) => thread.title)),
+          members: threads.map(memberOf),
+        }),
+      );
     },
     add: (home: EnvironmentId, groupId: ThreadGroupId, thread: GroupedThread) =>
-      run(home, { _tag: "add-members", groupId, members: [memberOf(thread)] }),
+      leaveGroupsElsewhere(home, [thread]).then(() =>
+        run(home, { _tag: "add-members", groupId, members: [memberOf(thread)] }),
+      ),
     remove: (home: EnvironmentId, groupId: ThreadGroupId, thread: GroupedThread) =>
       run(home, { _tag: "remove-members", groupId, members: [memberOf(thread)] }),
     rename: (home: EnvironmentId, groupId: ThreadGroupId, title: string) =>

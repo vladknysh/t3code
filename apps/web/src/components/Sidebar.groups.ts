@@ -18,8 +18,8 @@ export interface SidebarThreadGroupView<T> {
 
 /**
  * Matches groups to the thread shells this client knows and rolls each one up:
- * working if any member works, settled once every shown member is settled,
- * active otherwise. Members on an environment that is not connected, or
+ * working if any member works, settled once every shown member that can be
+ * settled (its environment supports it) is, active otherwise. Members on an environment that is not connected, or
  * outside the project filter, are left out, and a group with none left is
  * hidden. A thread grouped on two environments shows under the first group.
  */
@@ -30,6 +30,7 @@ export function resolveSidebarThreadGroups<
   readonly threads: readonly T[];
   readonly isWorking: (thread: T) => boolean;
   readonly isSettled: (thread: T) => boolean;
+  readonly canSettle: (thread: T) => boolean;
   readonly workingShelfEnabled: boolean;
 }): {
   readonly views: readonly SidebarThreadGroupView<T>[];
@@ -57,7 +58,7 @@ export function resolveSidebarThreadGroups<
     const section: SidebarThreadGroupSection =
       working && input.workingShelfEnabled
         ? "working"
-        : !working && members.every(input.isSettled)
+        : !working && settledAll(members.filter(input.canSettle), input.isSettled)
           ? "settled"
           : "active";
     views.push({
@@ -71,6 +72,9 @@ export function resolveSidebarThreadGroups<
   }
   return { views, groupKeyByThreadKey };
 }
+
+const settledAll = <T>(members: readonly T[], isSettled: (thread: T) => boolean) =>
+  members.length > 0 && members.every(isSettled);
 
 const TITLE_SEPARATORS = /[\s\-_/:.·]+$/;
 
