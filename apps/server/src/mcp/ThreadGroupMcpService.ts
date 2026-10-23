@@ -157,7 +157,8 @@ const make = Effect.gen(function* () {
           limit: MESSAGE_PAGE_SIZE,
           runLimit: 1,
           maxCharsPerItem: MESSAGE_CHARS,
-          afterPosition,
+          // -1 means "from the start"; the wire schema only takes positions.
+          ...(afterPosition < 0 ? {} : { afterPosition }),
         });
         items = [...items, ...page.items].slice(-MESSAGE_PAGE_SIZE);
         if (!page.hasMore || page.nextPosition === null) break;

@@ -15,6 +15,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -154,6 +155,19 @@ const stored = new Map<string, StoredThread>([
     },
   ],
   [
+    // Shorter than the tail window, so its tail read starts from the beginning.
+    `${laptop}/short-remote`,
+    {
+      title: "short-remote",
+      status: "idle",
+      itemCount: 2,
+      items: [
+        message(0, "user_message", "Check the CDN cache headers"),
+        message(1, "assistant_message", "They are set."),
+      ],
+    },
+  ],
+  [
     `${laptop}/rate-limit-research-web`,
     {
       title: "rate-limit-research-web",
@@ -197,8 +211,17 @@ const layer = ThreadGroupMcpService.layer.pipe(
       call: (_scope, tool, environmentId, params) => {
         if (tool.name !== "t3_thread_read") return Effect.die(`unexpected ${tool.name}`);
         if (environmentId === asleep) return Effect.never;
-        // The service forwards only t3_thread_read, whose parameters and success these are.
-        return answer(environmentId, params as OrchestratorMcpThreadReadInput) as never;
+        // Like the real link, the call is encoded for the wire first.
+        return Schema.encodeUnknownEffect(tool.parametersSchema as Schema.Encoder<unknown>)(
+          params,
+        ).pipe(
+          Effect.mapError(
+            () =>
+              new OrchestratorMcpFailure({ code: "orchestration_error", message: "bad params" }),
+          ),
+          // The service forwards only t3_thread_read, whose parameters and success these are.
+          Effect.andThen(answer(environmentId, params as OrchestratorMcpThreadReadInput)),
+        ) as never;
       },
       links: () =>
         Effect.succeed({
@@ -249,6 +272,7 @@ it.layer(layer)("ThreadGroupMcpService", (it) => {
           { threadId: ThreadId.make("rate-limit-research-api") },
           member(laptop, "rate-limit-research-web"),
           member(gone, "deleted-thread"),
+          member(laptop, "short-remote"),
         ],
       });
       // A member without an environment is a thread where the group is stored.
@@ -277,6 +301,7 @@ it.layer(layer)("ThreadGroupMcpService", (it) => {
       assert.isTrue(web?.thread?.settled);
       // An unreadable member is reported, not fatal.
       assert.deepInclude(deleted, { thread: null, unavailable: "Not found on env-gone." });
+      assert.deepInclude(info.members[3], { latestReply: "They are set.", unavailable: null });
       // Reading as an outside reader keeps delegated results unacknowledged.
       assert.isTrue(localReadScopes.length > 0);
       assert.isTrue(localReadScopes.every((scope) => scope.thread === undefined));
