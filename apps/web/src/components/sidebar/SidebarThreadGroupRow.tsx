@@ -212,8 +212,8 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
     return (
       <li {...shellProps} className="list-none pt-1">
         <div
-          role="tablist"
-          aria-label={`${props.title} projects`}
+          role="group"
+          aria-label={`Show ${props.title} threads from`}
           className="flex items-end gap-0.5 px-3"
         >
           <FolderTab
@@ -316,8 +316,8 @@ function FolderTab(props: {
   const button = (
     <button
       type="button"
-      role="tab"
-      aria-selected={props.selected}
+      // A filter, not a tab widget: there is no panel to switch to.
+      aria-pressed={props.selected}
       onClick={props.onSelect}
       className={cn(
         "inline-flex max-w-28 min-w-0 cursor-pointer items-center gap-1 rounded-t-lg px-2 pt-1 pb-1 text-2xs transition-colors",

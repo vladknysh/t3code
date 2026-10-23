@@ -208,7 +208,9 @@ import { SidebarThreadGroupRow } from "./sidebar/SidebarThreadGroupRow";
 import { useThreadGroupActions } from "./sidebar/useThreadGroupActions";
 import {
   resolveSidebarThreadGroups,
+  THREAD_GROUP_LAYOUT_KEY,
   threadGroupLanes,
+  ThreadGroupLayoutSchema,
   threadGroupTone,
   type SidebarProjectKey,
   type SidebarThreadGroupSection,
@@ -288,8 +290,6 @@ const isGroupAddMenuId = (id: string): id is `group-add:${string}` =>
   id.startsWith(GROUP_ADD_PREFIX);
 const COLLAPSED_GROUPS_SCHEMA = Schema.Array(Schema.String);
 // Two layouts are built to compare (lanes and folder tabs); the choice is per client.
-const GROUP_LAYOUT_KEY = "t3code:sidebar:group-layout";
-const GROUP_LAYOUT_SCHEMA = Schema.Literals(["lanes", "folder"]);
 const EMPTY_LANE_BY_GROUP: Readonly<Record<string, string>> = {};
 
 /** How one member row shows inside its group. */
@@ -450,9 +450,9 @@ function useSidebarThreads(input: {
   );
   const collapsedGroupKeys = new Set(collapsedGroupList);
   const [groupLayout, setGroupLayout] = useLocalStorage(
-    GROUP_LAYOUT_KEY,
+    THREAD_GROUP_LAYOUT_KEY,
     "lanes",
-    GROUP_LAYOUT_SCHEMA,
+    ThreadGroupLayoutSchema,
   );
   const [activeLaneByGroup, setActiveLaneByGroup] = useState(EMPTY_LANE_BY_GROUP);
 
@@ -1632,11 +1632,13 @@ export default function Sidebar() {
                 children: [
                   {
                     id: "group-layout:lanes" as const,
-                    label: `${groupLayoutRef.current === "lanes" ? "✓ " : ""}Lanes`,
+                    label: "Lanes",
+                    checked: groupLayoutRef.current === "lanes",
                   },
                   {
                     id: "group-layout:folder" as const,
-                    label: `${groupLayoutRef.current === "folder" ? "✓ " : ""}Folder tabs`,
+                    label: "Folder tabs",
+                    checked: groupLayoutRef.current === "folder",
                   },
                 ],
               },
@@ -1698,41 +1700,52 @@ export default function Sidebar() {
   const renderGroupRow = (
     view: SidebarThreadGroupView<EnvironmentThreadShell>,
     item: SidebarListItem,
-  ) => (
-    <SidebarThreadGroupRow
-      key={view.key}
-      sortableId={sidebarListItemId(item)}
-      groupKey={view.key}
-      title={view.group.title}
-      section={view.section}
-      memberCount={view.members.length}
-      memberKeys={view.members.map(threadShellKey).join("\n")}
-      collapsed={collapsedGroupKeys.has(view.key)}
-      layout={groupLayout}
-      tone={threadGroupTone(view.group.id)}
-      lanes={laneSummaries(view)}
-      activeLane={activeLaneByGroup[view.key] ?? null}
-      onSelectLane={selectGroupLane}
-      settlementSupported={view.members.some((thread) =>
-        supportsSettlementOn(thread.environmentId),
-      )}
-      isActive={
-        view.group.sessionThreadId !== null &&
-        routeThreadKey ===
-          scopedThreadKey(scopeThreadRef(view.environmentId, view.group.sessionThreadId))
-      }
-      isRenaming={renamingGroupKey === view.key}
-      renamingTitle={renamingGroupKey === view.key ? renamingGroupTitle : ""}
-      onToggleCollapsed={toggleGroupCollapsed}
-      onOpen={openGroup}
-      onSettle={settleGroup}
-      onUnsettle={unsettleGroup}
-      onContextMenu={handleGroupContextMenu}
-      onRenameTitleChange={setRenamingGroupTitle}
-      onCommitRename={commitGroupRename}
-      onCancelRename={cancelGroupRename}
-    />
-  );
+  ) => {
+    const lanes = laneSummaries(view);
+    return (
+      <SidebarThreadGroupRow
+        key={view.key}
+        sortableId={sidebarListItemId(item)}
+        groupKey={view.key}
+        title={view.group.title}
+        section={view.section}
+        memberCount={view.members.length}
+        memberKeys={view.members.map(threadShellKey).join("\n")}
+        collapsed={collapsedGroupKeys.has(view.key)}
+        layout={groupLayout}
+        tone={threadGroupTone(view.group.id)}
+        lanes={lanes}
+        activeLane={
+          lanes.some((lane) => lane.key === activeLaneByGroup[view.key])
+            ? activeLaneByGroup[view.key]!
+            : null
+        }
+        onSelectLane={(groupKey, laneKey) => {
+          selectGroupLane(groupKey, laneKey);
+          // A tab on a folded group would change nothing you can see.
+          if (collapsedGroupKeys.has(groupKey)) toggleGroupCollapsed(groupKey);
+        }}
+        settlementSupported={view.members.some((thread) =>
+          supportsSettlementOn(thread.environmentId),
+        )}
+        isActive={
+          view.group.sessionThreadId !== null &&
+          routeThreadKey ===
+            scopedThreadKey(scopeThreadRef(view.environmentId, view.group.sessionThreadId))
+        }
+        isRenaming={renamingGroupKey === view.key}
+        renamingTitle={renamingGroupKey === view.key ? renamingGroupTitle : ""}
+        onToggleCollapsed={toggleGroupCollapsed}
+        onOpen={openGroup}
+        onSettle={settleGroup}
+        onUnsettle={unsettleGroup}
+        onContextMenu={handleGroupContextMenu}
+        onRenameTitleChange={setRenamingGroupTitle}
+        onCommitRename={commitGroupRename}
+        onCancelRename={cancelGroupRename}
+      />
+    );
+  };
   const attemptUnsnooze = (threadRef: ScopedThreadRef) => {
     void (async () => {
       const result = await unsnoozeThread(threadRef);

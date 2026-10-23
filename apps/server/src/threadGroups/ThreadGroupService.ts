@@ -182,13 +182,20 @@ const make = Effect.gen(function* () {
     at: string,
     from: ThreadGroupMember | undefined,
   ) {
+    // The group's own session tidies the group; it hands no work over, so the
+    // threads it adds keep no origin.
+    const [group] = yield* sql<{ readonly session_thread_id: string | null }>`
+      SELECT session_thread_id FROM thread_groups WHERE group_id = ${groupId}
+    `;
+    const handedOverBy = from?.threadId === group?.session_thread_id ? undefined : from;
     for (const member of members) {
       // The thread bringing others in is not brought in by itself.
       const origin =
-        from === undefined ||
-        (from.environmentId === member.environmentId && from.threadId === member.threadId)
+        handedOverBy === undefined ||
+        (handedOverBy.environmentId === member.environmentId &&
+          handedOverBy.threadId === member.threadId)
           ? null
-          : from;
+          : handedOverBy;
       yield* leaveOtherGroups(member, groupId, at);
       yield* sql`
         INSERT INTO thread_group_members (

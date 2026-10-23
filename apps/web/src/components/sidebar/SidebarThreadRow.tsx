@@ -1347,7 +1347,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 label for the wider row controls. */}
               {pinIndicator}
               {titleOnTop ? (
-                title
+                <>
+                  {title}
+                  {isRegeneratingTitle ? (
+                    <span role="status" className="sr-only">
+                      Regenerating title
+                    </span>
+                  ) : null}
+                </>
               ) : props.projectDisplayName ? (
                 <span
                   className={cn(

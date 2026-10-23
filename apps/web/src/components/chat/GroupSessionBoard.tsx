@@ -1,7 +1,6 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import * as Schema from "effect/Schema";
 import { ArrowRightIcon } from "lucide-react";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -11,10 +10,14 @@ import { useEnvironmentIdentities, useEnvironmentMachines } from "../../state/en
 import { useThreadGroups } from "../../state/threadGroups";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { threadGroupLanes, threadGroupTone } from "../Sidebar.groups";
+import {
+  THREAD_GROUP_LAYOUT_KEY,
+  threadGroupLanes,
+  ThreadGroupLayoutSchema,
+  threadGroupTone,
+} from "../Sidebar.groups";
+import type { EnvironmentThreadGroup } from "../../state/threadGroups";
 import { resolveSidebarThreadStatus, type SidebarThreadStatus } from "../Sidebar.logic";
-
-const GROUP_LAYOUT_SCHEMA = Schema.Literals(["lanes", "folder"]);
 
 const STATUS_LABEL = {
   approval: "Needs approval",
@@ -46,16 +49,22 @@ export function GroupSessionBoard(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }) {
-  const [layout] = useLocalStorage("t3code:sidebar:group-layout", "lanes", GROUP_LAYOUT_SCHEMA);
+  const [layout] = useLocalStorage(THREAD_GROUP_LAYOUT_KEY, "lanes", ThreadGroupLayoutSchema);
   const group = useThreadGroups().find(
     (entry) =>
       entry.environmentId === props.environmentId && entry.group.sessionThreadId === props.threadId,
   );
+  // Every chat mounts this; only a group session subscribes to the thread list.
+  if (group === undefined || layout !== "lanes") return null;
+  return <GroupSessionLanes group={group} />;
+}
+
+function GroupSessionLanes(props: { readonly group: EnvironmentThreadGroup }) {
+  const { group } = props;
   const shells = useQuietThreadShells();
   const projects = useProjects();
   const environments = useEnvironmentIdentities();
   const machines = useEnvironmentMachines();
-  if (group === undefined || layout !== "lanes") return null;
 
   const shellByKey = new Map(
     shells.map((shell) => [scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)), shell]),

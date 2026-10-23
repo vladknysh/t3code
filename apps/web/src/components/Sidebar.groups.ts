@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import type { EnvironmentId, ProjectId, ThreadGroup, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 
@@ -100,7 +101,10 @@ export function defaultThreadGroupTitle(titles: readonly string[]): string {
 }
 
 /** How a group lays out its members: C1 lanes or C3 folder tabs. */
-export type SidebarThreadGroupLayout = "lanes" | "folder";
+/** How groups lay out their members; a per-client preference. */
+export const THREAD_GROUP_LAYOUT_KEY = "t3code:sidebar:group-layout";
+export const ThreadGroupLayoutSchema = Schema.Literals(["lanes", "folder"]);
+export type SidebarThreadGroupLayout = typeof ThreadGroupLayoutSchema.Type;
 
 /** A group's colour, one of the tones index.css defines, steady for its id. */
 export function threadGroupTone(groupId: string): number {
