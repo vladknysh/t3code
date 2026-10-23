@@ -123,6 +123,14 @@ export function createSidebarSortingStrategy(input: {
       snoozed: [],
       settled: [],
     };
+    // Group rows and their members stay at the top of their section.
+    const fixed: Record<SidebarSection, SidebarListItem[]> = {
+      pinned: [],
+      active: [],
+      working: [],
+      snoozed: [],
+      settled: [],
+    };
     let cardHeight = input.cardHeight;
     let slimHeight = input.slimHeight;
     let headerScale: number | undefined;
@@ -132,6 +140,10 @@ export function createSidebarSortingStrategy(input: {
           const height = rects[index]?.height;
           if (height) headerScale ??= height / 32;
         }
+        continue;
+      }
+      if (item.kind !== "thread") {
+        fixed[item.section].push(item);
         continue;
       }
       if (item.section === "pinned" || item.section === "active" || item.section === "working")
@@ -171,8 +183,9 @@ export function createSidebarSortingStrategy(input: {
     const projected: SidebarListItem[] = [];
     const marker = (name: SidebarListMarker) => projected.push({ kind: "marker", marker: name });
     const section = (name: "active" | "settled") => {
+      projected.push(...fixed[name]);
       if (groups[name].length > 0) projected.push(...groups[name]);
-      else marker(`${name}-placeholder`);
+      else if (fixed[name].length === 0) marker(`${name}-placeholder`);
     };
     marker("pinned-header");
     projected.push(...groups.pinned);
@@ -180,7 +193,7 @@ export function createSidebarSortingStrategy(input: {
     section("active");
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
-      projected.push(...groups.working);
+      projected.push(...fixed.working, ...groups.working);
     }
     if (
       groups.snoozed.length > 0 ||
@@ -196,7 +209,7 @@ export function createSidebarSortingStrategy(input: {
       const index = indices.get(sidebarListItemId(item));
       const rect = index === undefined ? undefined : rects[index];
       const fallback =
-        item.kind === "thread" &&
+        item.kind !== "marker" &&
         (item.section === "pinned" || item.section === "active" || item.section === "working")
           ? cardHeight
           : slimHeight;

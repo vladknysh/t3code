@@ -515,6 +515,8 @@ type SidebarThreadRowProps = {
   snoozeSupported: boolean;
   pinningSupported: boolean;
   isPinned: boolean;
+  /** A member shown under its group's row. */
+  nested?: boolean | undefined;
   sortable?: SortableThreadRowBag | undefined;
   dropVerb: SidebarDropVerb | null;
   dragOverPinned: boolean;
@@ -1080,6 +1082,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         {...(fileDropHandlers ?? {})}
         className={cn(
           "list-none [content-visibility:auto] [contain-intrinsic-size:auto_36px]",
+          props.nested && "ml-3 border-l border-border/70 pl-2",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -1239,6 +1242,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       {...(fileDropHandlers ?? {})}
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
+        props.nested && "ml-3 border-l border-border/70 pl-2",
         sortable?.isDragging && "relative z-20",
       )}
     >

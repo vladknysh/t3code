@@ -36,7 +36,7 @@ function layout(
   let top = 100;
   const rects = items.map((item) => {
     const height =
-      item.kind === "thread"
+      item.kind !== "marker"
         ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
         : item.marker === "pinned-header" || item.marker === "pinned-divider"
           ? 0
