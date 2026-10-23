@@ -205,6 +205,17 @@ import {
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
 import {
+  SidebarThreadGroupRow,
+  type SidebarThreadGroupEnvironment,
+} from "./sidebar/SidebarThreadGroupRow";
+import { useThreadGroupActions } from "./sidebar/useThreadGroupActions";
+import {
+  resolveSidebarThreadGroups,
+  type SidebarThreadGroupSection,
+  type SidebarThreadGroupView,
+} from "./Sidebar.groups";
+import { type EnvironmentThreadGroup, useThreadGroups } from "../state/threadGroups";
+import {
   SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
@@ -271,6 +282,12 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+const COLLAPSED_GROUPS_KEY = "t3code:sidebar:collapsed-groups";
+const GROUP_ADD_PREFIX = "group-add:";
+const isGroupAddMenuId = (id: string): id is `group-add:${string}` =>
+  id.startsWith(GROUP_ADD_PREFIX);
+const COLLAPSED_GROUPS_SCHEMA = Schema.Array(Schema.String);
+const NO_COLLAPSED_GROUPS: readonly string[] = [];
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -353,9 +370,16 @@ function useSidebarThreads(input: {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly routeThreadRef: ScopedThreadRef | null;
+  readonly threadGroups: readonly EnvironmentThreadGroup[];
 }) {
-  const { projectScopeKey, scopedProjectKeys, serverConfigs, optimisticDrop, routeThreadRef } =
-    input;
+  const {
+    projectScopeKey,
+    scopedProjectKeys,
+    serverConfigs,
+    optimisticDrop,
+    routeThreadRef,
+    threadGroups,
+  } = input;
   const threads = useQuietThreadShells();
   const routeRowThreadKey =
     routeThreadRef === null
@@ -405,8 +429,14 @@ function useSidebarThreads(input: {
   }
   const settledVisibleCount =
     settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
+  const [collapsedGroupList, setCollapsedGroupList] = useLocalStorage(
+    COLLAPSED_GROUPS_KEY,
+    NO_COLLAPSED_GROUPS,
+    COLLAPSED_GROUPS_SCHEMA,
+  );
+  const collapsedGroupKeys = new Set(collapsedGroupList);
 
-  const partition = partitionSidebarThreads({
+  const ungroupedPartition = partitionSidebarThreads({
     threads,
     scopedProjectKeys,
     serverConfigs,
@@ -414,6 +444,32 @@ function useSidebarThreads(input: {
     workingShelfEnabled,
     clockKey: `${nowMinute}:${snoozeWakeTick}`,
   });
+  // Grouped threads leave their own sections and show under their group,
+  // which sits where its members' state puts it.
+  const grouping = resolveSidebarThreadGroups({
+    groups: threadGroups,
+    threads: filterSidebarV2VisibleThreads(threads, scopedProjectKeys),
+    // The same test that puts a lone thread on the Working shelf, so a group
+    // sits where its working member would. The row's own Working label reads
+    // live shells; these quiet ones hold still while a run streams.
+    isWorking: isSidebarThreadWorking,
+    isSettled: (thread) =>
+      serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true &&
+      thread.settledOverride === "settled",
+    workingShelfEnabled,
+  });
+  const ungrouped = (list: readonly EnvironmentThreadShell[]) =>
+    grouping.views.length === 0
+      ? list
+      : list.filter((thread) => !grouping.groupKeyByThreadKey.has(threadShellKey(thread)));
+  const partition = {
+    ...ungroupedPartition,
+    pinnedThreads: ungrouped(ungroupedPartition.pinnedThreads),
+    activeThreads: ungrouped(ungroupedPartition.activeThreads),
+    workingThreads: ungrouped(ungroupedPartition.workingThreads),
+    snoozedThreads: ungrouped(ungroupedPartition.snoozedThreads),
+    settledThreads: ungrouped(ungroupedPartition.settledThreads),
+  };
   const partitionNextWakeAt = partition.snoozedThreads[0]?.snoozedUntil ?? null;
   if (partitionNextWakeAt !== nextSnoozeWakeAt) setNextSnoozeWakeAt(partitionNextWakeAt);
 
@@ -439,14 +495,27 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
+  // A collapsed shelf hides its groups as it hides its threads.
+  const shelfOpen = { active: true, working: workingShelfExpanded, settled: settledShelfExpanded };
+  const visibleGroups = grouping.views.filter((view) => shelfOpen[view.section]);
+  const expandedMembers = (section: SidebarThreadGroupSection) =>
+    visibleGroups.flatMap((view) =>
+      view.section === section && !collapsedGroupKeys.has(view.key) ? view.members : [],
+    );
   const orderedThreads = [
     ...pinnedThreads,
+    ...expandedMembers("active"),
     ...activeThreads,
+    ...expandedMembers("working"),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
+    ...expandedMembers("settled"),
     ...renderedSettledThreads,
   ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
+  for (const view of grouping.views) {
+    for (const thread of view.members) sectionByThreadKey.set(threadShellKey(thread), view.section);
+  }
   for (const [list, section] of [
     [pinnedThreads, "pinned"],
     [activeThreads, "active"],
@@ -462,6 +531,7 @@ function useSidebarThreads(input: {
     threads,
     workingShelfEnabled,
     searchableThreads: [
+      ...grouping.views.flatMap((view) => view.members),
       ...pinnedThreads,
       ...activeThreads,
       ...workingThreads,
@@ -481,13 +551,24 @@ function useSidebarThreads(input: {
     toggleSnoozedShelf: () => setSnoozedShelfExpanded((value) => !value),
     workingShelfExpanded,
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
+    groupViews: grouping.views,
+    visibleGroups,
+    groupKeyByThreadKey: grouping.groupKeyByThreadKey,
+    collapsedGroupKeys,
+    toggleGroupCollapsed: (groupKey: string) =>
+      setCollapsedGroupList((current) =>
+        current.includes(groupKey)
+          ? current.filter((key) => key !== groupKey)
+          : [...current, groupKey],
+      ),
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
-    settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
-    snoozedThreadKeys: new Set(snoozedThreads.map(threadShellKey)),
+    // From every thread, grouped or not: menus read a member's own state.
+    settledThreadKeys: new Set(ungroupedPartition.settledThreads.map(threadShellKey)),
+    snoozedThreadKeys: new Set(ungroupedPartition.snoozedThreads.map(threadShellKey)),
     sectionByThreadKey,
     pinnedKeys: pinnedThreads.map(threadShellKey),
     activeKeys: activeThreads.map(threadShellKey),
@@ -864,6 +945,7 @@ export default function Sidebar() {
   // lifecycle command and any order-key writes. The next pickup waits for
   // this hold so a second drop cannot replace an unconfirmed placement.
   const [optimisticDrop, setOptimisticDrop] = useState<SidebarOptimisticDrop | null>(null);
+  const threadGroups = useThreadGroups();
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [searchHighlight, setSearchHighlight] = useState({ orderKey: "", index: 0 });
@@ -1052,12 +1134,18 @@ export default function Sidebar() {
     pinnedKeysById,
     activeKeysById,
     routeRowThreadKey,
+    groupViews,
+    visibleGroups,
+    groupKeyByThreadKey,
+    collapsedGroupKeys,
+    toggleGroupCollapsed,
   } = useSidebarThreads({
     projectScopeKey,
     scopedProjectKeys,
     serverConfigs,
     optimisticDrop,
     routeThreadRef,
+    threadGroups,
   });
 
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
@@ -1103,6 +1191,7 @@ export default function Sidebar() {
   // identities would give every row a fresh callback prop on each shell
   // event and defeat row memoization during streaming.
   const threadByKeyRef = useRef(threadByKey);
+  const groupKeyByThreadKeyRef = useRef(groupKeyByThreadKey);
   const settledThreadKeysRef = useRef(settledThreadKeys);
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
 
@@ -1341,6 +1430,143 @@ export default function Sidebar() {
       }
     })();
   };
+  const groupActions = useThreadGroupActions({ primaryEnvironmentId, serverConfigs });
+  const groupViewByKey = new Map(groupViews.map((view) => [view.key, view] as const));
+  const groupViewByKeyRef = useRef(groupViewByKey);
+  useEffect(() => {
+    groupViewByKeyRef.current = groupViewByKey;
+  });
+  const [renamingGroupKey, setRenamingGroupKey] = useState<string | null>(null);
+  const [renamingGroupTitle, setRenamingGroupTitle] = useState("");
+  const supportsSettlementOn = (environmentId: EnvironmentId) =>
+    serverConfigs.get(environmentId)?.environment.capabilities.threadSettlement === true;
+  // Members of a collapsed group are not rendered, so group actions read the
+  // members from the group itself rather than the rendered rows.
+  const settleGroup = useStableCallback((groupKey: string) => {
+    const members = groupViewByKeyRef.current.get(groupKey)?.members ?? [];
+    const settling = members.filter(
+      (thread) =>
+        thread.settledOverride !== "settled" && supportsSettlementOn(thread.environmentId),
+    );
+    if (settling.length === 0 || !checkThreadOperations(settling)) return;
+    const coSettlingKeys = new Set(settling.map(threadShellKey));
+    for (const thread of settling) {
+      attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
+    }
+  });
+  const unsettleGroup = useStableCallback((groupKey: string) => {
+    const members = groupViewByKeyRef.current.get(groupKey)?.members ?? [];
+    const unsettling = members.filter((thread) => thread.settledOverride === "settled");
+    if (unsettling.length === 0 || !checkThreadOperations(unsettling)) return;
+    for (const thread of unsettling) {
+      attemptUnsettle(scopeThreadRef(thread.environmentId, thread.id));
+    }
+  });
+  const openGroup = useStableCallback((groupKey: string) => toggleGroupCollapsed(groupKey));
+  const commitGroupRename = useStableCallback((groupKey: string, title: string) => {
+    const view = groupViewByKeyRef.current.get(groupKey);
+    setRenamingGroupKey(null);
+    const trimmed = title.trim();
+    if (view === undefined || trimmed.length === 0 || trimmed === view.group.title) return;
+    void groupActions.rename(view.environmentId, view.group.id, trimmed);
+  });
+  const cancelGroupRename = useStableCallback(() => setRenamingGroupKey(null));
+  const handleGroupContextMenu = useStableCallback(
+    (groupKey: string, position: { x: number; y: number }) => {
+      void (async () => {
+        const api = readLocalApi();
+        const view = groupViewByKeyRef.current.get(groupKey);
+        if (!api || view === undefined) return;
+        const settled = view.section === "settled";
+        const canSettle = view.members.some((thread) => supportsSettlementOn(thread.environmentId));
+        const clicked = await settlePromise(() =>
+          api.contextMenu.show(
+            [
+              { id: "group-rename" as const, label: "Rename group", icon: "pencil" },
+              ...(canSettle
+                ? [
+                    settled
+                      ? { id: "group-unsettle" as const, label: "Un-settle group" }
+                      : { id: "group-settle" as const, label: "Settle group" },
+                  ]
+                : []),
+              {
+                id: "group-ungroup" as const,
+                label: "Ungroup threads",
+                separatorBefore: true,
+                destructive: true,
+              },
+            ],
+            position,
+          ),
+        );
+        if (clicked._tag === "Failure" || clicked.value === null) return;
+        switch (clicked.value) {
+          case "group-rename":
+            setRenamingGroupTitle(view.group.title);
+            setRenamingGroupKey(groupKey);
+            return;
+          case "group-settle":
+            settleGroup(groupKey);
+            return;
+          case "group-unsettle":
+            unsettleGroup(groupKey);
+            return;
+          case "group-ungroup":
+            void groupActions.ungroup(view.environmentId, view.group.id);
+            return;
+        }
+      })();
+    },
+  );
+  const groupEnvironments = (
+    view: SidebarThreadGroupView<EnvironmentThreadShell>,
+  ): SidebarThreadGroupEnvironment[] =>
+    [...new Set(view.members.map((thread) => thread.environmentId))].map((environmentId) => ({
+      environmentId,
+      label: environmentLabelById.get(environmentId) ?? "Unknown environment",
+      machine: environmentMachineById.get(environmentId) ?? "server",
+    }));
+  const groupProviders = (view: SidebarThreadGroupView<EnvironmentThreadShell>) => {
+    const entries = new Map<string, SidebarProviderEntry>();
+    for (const thread of view.members) {
+      const instanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
+      const entry = providerEntriesByEnvironment.get(thread.environmentId)?.get(instanceId);
+      if (entry !== undefined) entries.set(`${entry.driverKind}:${entry.displayName}`, entry);
+    }
+    return [...entries.values()];
+  };
+  const renderGroupRow = (
+    view: SidebarThreadGroupView<EnvironmentThreadShell>,
+    item: SidebarListItem,
+  ) => (
+    <SidebarThreadGroupRow
+      key={view.key}
+      sortableId={sidebarListItemId(item)}
+      groupKey={view.key}
+      title={view.group.title}
+      section={view.section}
+      memberCount={view.members.length}
+      memberKeys={view.members.map(threadShellKey).join("\n")}
+      collapsed={collapsedGroupKeys.has(view.key)}
+      environments={groupEnvironments(view)}
+      providers={groupProviders(view)}
+      settlementSupported={view.members.some((thread) =>
+        supportsSettlementOn(thread.environmentId),
+      )}
+      isActive={false}
+      isRenaming={renamingGroupKey === view.key}
+      renamingTitle={renamingGroupKey === view.key ? renamingGroupTitle : ""}
+      onToggleCollapsed={toggleGroupCollapsed}
+      onOpen={openGroup}
+      onSettle={settleGroup}
+      onUnsettle={unsettleGroup}
+      onContextMenu={handleGroupContextMenu}
+      onRenameTitleChange={setRenamingGroupTitle}
+      onCommitRename={commitGroupRename}
+      onCancelRename={cancelGroupRename}
+    />
+  );
   const attemptUnsnooze = (threadRef: ScopedThreadRef) => {
     void (async () => {
       const result = await unsnoozeThread(threadRef);
@@ -1441,6 +1667,7 @@ export default function Sidebar() {
     projectGroupsRef.current = projectGroups;
     orderedThreadKeysRef.current = orderedThreadKeys;
     threadByKeyRef.current = threadByKey;
+    groupKeyByThreadKeyRef.current = groupKeyByThreadKey;
     handleNewThreadRef.current = newThreadContext.handleNewThread;
     settledThreadKeysRef.current = settledThreadKeys;
     snoozedThreadKeysRef.current = snoozedThreadKeys;
@@ -1578,6 +1805,8 @@ export default function Sidebar() {
         event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
     });
   };
+  const workingGroupCount = groupViews.filter((view) => view.section === "working").length;
+  const settledGroupCount = groupViews.filter((view) => view.section === "settled").length;
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
@@ -1587,12 +1816,29 @@ export default function Sidebar() {
         const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
         return { kind: "thread", key, section };
       });
+    // A group's row, then its members unless it is collapsed.
+    const groupRowsOf = (section: SidebarThreadGroupSection): SidebarListItem[] =>
+      visibleGroups.flatMap((view): SidebarListItem[] =>
+        view.section !== section
+          ? []
+          : [
+              { kind: "group", key: view.key, section },
+              ...(collapsedGroupKeys.has(view.key)
+                ? []
+                : view.members.map((thread): SidebarListItem => ({
+                    kind: "member",
+                    key: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                    section,
+                  }))),
+            ],
+      );
     if (
       pinnedThreads.length +
         activeThreads.length +
         workingThreads.length +
         snoozedThreads.length +
-        settledThreads.length ===
+        settledThreads.length +
+        groupViews.length ===
       0
     ) {
       return [];
@@ -1603,9 +1849,11 @@ export default function Sidebar() {
     items.push({ kind: "marker", marker: "pinned-divider" });
     const activeRows = rowsOf(activeThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
+    items.push(...groupRowsOf("active"));
     items.push(...activeRows);
-    if (workingThreads.length > 0) {
+    if (workingThreads.length > 0 || workingGroupCount > 0) {
       items.push({ kind: "marker", marker: "working-header" });
+      items.push(...groupRowsOf("working"));
       items.push(...rowsOf(visibleWorkingThreads, "working"));
     }
     if (snoozedThreads.length > 0) {
@@ -1615,6 +1863,7 @@ export default function Sidebar() {
     items.push({ kind: "marker", marker: "settled-header" });
     const settledRows = rowsOf(renderedSettledThreads, "settled");
     items.push({ kind: "marker", marker: "settled-placeholder" });
+    items.push(...groupRowsOf("settled"));
     items.push(...settledRows);
     return items;
   })();
@@ -1622,7 +1871,9 @@ export default function Sidebar() {
   // list's identity until its order changes, so the sorting strategy, the
   // sortable context and every sortable row stay memoized meanwhile.
   const sidebarListItemsKey = sidebarListItemsFresh
-    .map((item) => (item.kind === "thread" ? item.section + ":" + item.key : item.marker))
+    .map((item) =>
+      item.kind === "marker" ? item.marker : `${item.kind}:${item.section}:${item.key}`,
+    )
     .join("\n");
   const [sidebarListItemsState, setSidebarListItems] = useState(sidebarListItemsFresh);
   const [sidebarListItemsKeyState, setSidebarListItemsKeyState] = useState(sidebarListItemsKey);
@@ -2012,6 +2263,9 @@ export default function Sidebar() {
                   },
                 ]
               : []),
+            ...(count > 1 && groupActions.canCreate(selectedThreads)
+              ? [{ id: "group" as const, label: `Group threads (${count})` }]
+              : []),
             { id: "mark-unread", label: `Mark unread (${count})` },
             {
               id: "delete",
@@ -2024,6 +2278,11 @@ export default function Sidebar() {
         ),
       );
       if (clicked._tag === "Failure" || clicked.value === null) return;
+      if (clicked.value === "group") {
+        clearSelection();
+        void groupActions.create(selectedThreads);
+        return;
+      }
       const actionTargets =
         clicked.value === "unpin"
           ? pinnedSelectedThreads
@@ -2270,40 +2529,94 @@ export default function Sidebar() {
                 projectRef.projectId === thread.projectId,
             ),
           ) ?? null;
+        const currentGroup = groupViewByKeyRef.current.get(
+          groupKeyByThreadKeyRef.current.get(threadKey) ?? "",
+        );
+        const otherGroups = [...groupViewByKeyRef.current.values()].filter(
+          (view) => view.key !== currentGroup?.key,
+        );
+        const groupMenuItems = [
+          ...(groupActions.canCreate([thread])
+            ? [
+                {
+                  id: "group-add" as const,
+                  label: "Add to group",
+                  separatorBefore: true,
+                  children: [
+                    ...otherGroups.map((view) => ({
+                      id: `group-add:${view.key}` as const,
+                      label: view.group.title,
+                    })),
+                    {
+                      id: "group-new" as const,
+                      label: "New group",
+                      separatorBefore: otherGroups.length > 0,
+                    },
+                  ],
+                },
+              ]
+            : []),
+          ...(currentGroup
+            ? [{ id: "group-remove" as const, label: `Remove from ${currentGroup.group.title}` }]
+            : []),
+        ];
+        const threadMenuItems = buildThreadActionMenuItems({
+          canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+          branch: thread.branch ?? null,
+          projectFilter: threadProjectGroup
+            ? {
+                label: threadProjectGroup.displayName,
+                isActive: projectScopeKey === threadProjectGroup.projectKey,
+              }
+            : null,
+          isPinned,
+          isSettled,
+          autoSettleEnabled: thread.autoSettleDisabledAt == null,
+          isSnoozed,
+          canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+          isRegeneratingTitle,
+          isRunning: !threadRuntimeCanArchive(thread.runtime),
+          supports: {
+            settlement: supportsSettlement,
+            autoSettleOptOut: supportsAutoSettleOptOut,
+            snooze: supportsSnooze,
+            pinning: supportsPinning,
+            titleRegeneration: supportsTitleRegeneration,
+          },
+          snoozePresets,
+        });
+        // Group actions sit with the thread's own state, above rename and copy.
+        const renameAt = threadMenuItems.findIndex((item) => item.id === "rename");
+        const groupMenuAt = renameAt < 0 ? threadMenuItems.length : renameAt;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildThreadActionMenuItems({
-              canOperate: readEnvironmentScope(
-                threadRef.environmentId,
-                AuthOrchestrationOperateScope,
-              ),
-              branch: thread.branch ?? null,
-              projectFilter: threadProjectGroup
-                ? {
-                    label: threadProjectGroup.displayName,
-                    isActive: projectScopeKey === threadProjectGroup.projectKey,
-                  }
-                : null,
-              isPinned,
-              isSettled,
-              autoSettleEnabled: thread.autoSettleDisabledAt == null,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning: !threadRuntimeCanArchive(thread.runtime),
-              supports: {
-                settlement: supportsSettlement,
-                autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: supportsSnooze,
-                pinning: supportsPinning,
-                titleRegeneration: supportsTitleRegeneration,
-              },
-              snoozePresets,
-            }),
+            [
+              ...threadMenuItems.slice(0, groupMenuAt),
+              ...groupMenuItems,
+              ...threadMenuItems.slice(groupMenuAt),
+            ],
             position,
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
+        if (clicked.value === "group-new") {
+          void groupActions.create([thread]);
+          return;
+        }
+        if (clicked.value === "group-remove") {
+          if (currentGroup) {
+            void groupActions.remove(currentGroup.environmentId, currentGroup.group.id, thread);
+          }
+          return;
+        }
+        if (clicked.value === "group-add") return;
+        if (isGroupAddMenuId(clicked.value)) {
+          const target = groupViewByKeyRef.current.get(
+            clicked.value.slice(GROUP_ADD_PREFIX.length),
+          );
+          if (target) void groupActions.add(target.environmentId, target.group.id, thread);
+          return;
+        }
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
@@ -2843,6 +3156,7 @@ export default function Sidebar() {
                       const renderThreadRow = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
+                        nested = false,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -2856,10 +3170,12 @@ export default function Sidebar() {
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
                             sortableDisabled={
+                              nested ||
                               renamingThreadKey === threadKey ||
                               !draggableThreadKeys.has(threadKey) ||
                               optimisticDrop !== null
                             }
+                            nested={nested}
                             thread={thread}
                             variant={rowVariant}
                             variantAction={
@@ -2962,8 +3278,19 @@ export default function Sidebar() {
                         />,
                       ];
                       for (const item of sidebarListItems) {
-                        if (item.kind === "thread") {
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                        if (item.kind === "thread" || item.kind === "member") {
+                          items.push(
+                            renderThreadRow(
+                              threadByKey.get(item.key)!,
+                              item.section,
+                              item.kind === "member",
+                            ),
+                          );
+                          continue;
+                        }
+                        if (item.kind === "group") {
+                          const view = groupViewByKey.get(item.key);
+                          if (view !== undefined) items.push(renderGroupRow(view, item));
                           continue;
                         }
                         switch (item.marker) {
@@ -3016,7 +3343,7 @@ export default function Sidebar() {
                                 label={
                                   workingShelfExpanded
                                     ? "Working"
-                                    : `Working (${workingThreads.length})`
+                                    : `Working (${workingThreads.length + workingGroupCount})`
                                 }
                                 toggle={{
                                   expanded: workingShelfExpanded,
@@ -3054,7 +3381,7 @@ export default function Sidebar() {
                                 label={
                                   settledShelfExpanded
                                     ? "Settled"
-                                    : `Settled (${settledThreads.length})`
+                                    : `Settled (${settledThreads.length + settledGroupCount})`
                                 }
                                 dragging={from !== null}
                                 isDropTarget={dragTargetSection === "settled"}
@@ -3110,7 +3437,8 @@ export default function Sidebar() {
             activeThreads.length +
             workingThreads.length +
             snoozedThreads.length +
-            settledThreads.length ===
+            settledThreads.length +
+            groupViews.length ===
             0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
               {projects.length === 0 ? (

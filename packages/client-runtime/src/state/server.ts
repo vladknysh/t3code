@@ -1113,6 +1113,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
     }),
+    threadGroupsLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:thread-groups:live",
+      tag: WS_METHODS.threadGroupsSubscribe,
+    }),
     // A cold transcript scan is measured in seconds, so keep the result around
     // long enough that switching windows or re-rendering does not rescan.
     usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -1304,6 +1308,10 @@ export function createServerEnvironmentAtoms<R, E>(
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
+    }),
+    updateThreadGroup: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:thread-group:update",
+      tag: WS_METHODS.threadGroupsUpdate,
     }),
     upsertScheduledTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:upsert",
