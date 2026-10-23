@@ -336,6 +336,19 @@ export function summarizeT3ToolCalls(
     case "environment-links":
       label = phrase("Listed", "list", `linked environments ${times}`);
       break;
+    case "group-list":
+      label = phrase("Listed", "list", `thread groups ${times}`);
+      break;
+    case "group-update":
+      label = phrase(
+        "Updated",
+        "update",
+        quantity(countEntities(entityIds("groupId")), "thread group"),
+      );
+      break;
+    case "group-info":
+      label = phrase("Read", "read", quantity(countEntities(entityIds("groupId")), "thread group"));
+      break;
     case "attachment-prepare":
       label = phrase(
         "Prepared",
