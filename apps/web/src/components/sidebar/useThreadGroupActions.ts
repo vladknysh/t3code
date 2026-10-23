@@ -7,6 +7,10 @@ import {
 } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { readEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -39,6 +43,9 @@ export function useThreadGroupActions(input: {
 }) {
   const update = useAtomCommand(serverEnvironment.updateThreadGroup, {
     label: "thread group update",
+  });
+  const openSession = useAtomCommand(serverEnvironment.openThreadGroupSession, {
+    label: "thread group session",
   });
   const supportsGroups = (environmentId: EnvironmentId) =>
     input.serverConfigs.get(environmentId)?.environment.capabilities.threadGroups === true;
@@ -107,5 +114,20 @@ export function useThreadGroupActions(input: {
       run(home, { _tag: "rename", groupId, title }),
     ungroup: (home: EnvironmentId, groupId: ThreadGroupId) =>
       run(home, { _tag: "delete", groupId }),
+    /** The group's session thread on its home environment, started on first use. */
+    openSession: async (home: EnvironmentId, groupId: ThreadGroupId) => {
+      if (!readEnvironmentScope(home, AuthOrchestrationOperateScope)) return null;
+      const result = await openSession({ environmentId: home, input: { groupId } });
+      if (result._tag === "Success") return result.value.threadId;
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Could not open the group session",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      }
+      return null;
+    },
   };
 }

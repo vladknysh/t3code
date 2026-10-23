@@ -31,6 +31,7 @@ const group = (key: string, members: ReadonlyArray<Thread>, environmentId = mini
       environmentId: member.environmentId,
       threadId: member.id,
     })),
+    sessionThreadId: null,
     createdAt: at,
     updatedAt: at,
   },

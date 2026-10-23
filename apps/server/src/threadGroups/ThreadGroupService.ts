@@ -48,6 +48,11 @@ export class ThreadGroupService extends Context.Service<
     readonly update: (
       input: ThreadGroupUpdateInput,
     ) => Effect.Effect<ThreadGroupUpdateResult, ThreadGroupNotFoundError | ThreadGroupStorageError>;
+    /** Records the group's session thread, replacing one that is gone. */
+    readonly setSession: (input: {
+      readonly groupId: ThreadGroupId;
+      readonly threadId: ThreadId;
+    }) => Effect.Effect<ThreadGroup, ThreadGroupNotFoundError | ThreadGroupStorageError>;
     /** Drops a thread that no longer exists from whichever group holds it. */
     readonly forgetThread: (
       member: ThreadGroupMember,
@@ -63,6 +68,7 @@ interface MembersChange {
 interface GroupRow {
   readonly group_id: string;
   readonly title: string;
+  readonly session_thread_id: string | null;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -90,6 +96,7 @@ const make = Effect.gen(function* () {
     groups.map((row) => ({
       id: ThreadGroupId.make(row.group_id),
       title: row.title,
+      sessionThreadId: row.session_thread_id === null ? null : ThreadId.make(row.session_thread_id),
       createdAt: IsoDateTime.make(row.created_at),
       updatedAt: IsoDateTime.make(row.updated_at),
       members: members
@@ -105,7 +112,7 @@ const make = Effect.gen(function* () {
   const readAll = sql.withTransaction(
     Effect.gen(function* () {
       const groups = yield* sql<GroupRow>`
-        SELECT group_id, title, created_at, updated_at FROM thread_groups
+        SELECT group_id, title, session_thread_id, created_at, updated_at FROM thread_groups
         ORDER BY created_at, group_id
       `;
       const members = yield* sql<MemberRow>`
@@ -119,7 +126,7 @@ const make = Effect.gen(function* () {
   // Helpers below run inside an operation's own span, so they add none.
   const readOne = Effect.fnUntraced(function* (groupId: ThreadGroupId) {
     const groups = yield* sql<GroupRow>`
-      SELECT group_id, title, created_at, updated_at FROM thread_groups
+      SELECT group_id, title, session_thread_id, created_at, updated_at FROM thread_groups
       WHERE group_id = ${groupId}
     `;
     const members = yield* sql<MemberRow>`
@@ -335,7 +342,20 @@ const make = Effect.gen(function* () {
     if (removed) yield* PubSub.publish(changes, undefined);
   });
 
-  return ThreadGroupService.of({ list, subscribe, get, update, forgetThread });
+  const setSession: ThreadGroupService["Service"]["setSession"] = Effect.fn(
+    "ThreadGroupService.setSession",
+  )(function* (input) {
+    // Setting a session never empties a group, so the stored group is there.
+    const group = yield* mutate(
+      "set-session",
+      input.groupId,
+      () =>
+        sql`UPDATE thread_groups SET session_thread_id = ${input.threadId} WHERE group_id = ${input.groupId}`,
+    );
+    return group!;
+  });
+
+  return ThreadGroupService.of({ list, subscribe, get, update, setSession, forgetThread });
 });
 
 export const layer = Layer.effect(ThreadGroupService, make);

@@ -367,6 +367,8 @@ import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts
 import {
   ThreadGroupError,
   ThreadGroupListResult,
+  ThreadGroupOpenSessionInput,
+  ThreadGroupOpenSessionResult,
   ThreadGroupUpdateInput,
   ThreadGroupUpdateResult,
 } from "./threadGroup.ts";
@@ -540,6 +542,7 @@ export const WS_METHODS = {
 
   threadGroupsSubscribe: "threadGroups.subscribe",
   threadGroupsUpdate: "threadGroups.update",
+  threadGroupsOpenSession: "threadGroups.openSession",
 
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -1908,6 +1911,12 @@ const WsThreadGroupsUpdateRpc = Rpc.make(WS_METHODS.threadGroupsUpdate, {
   error: threadGroupError,
 });
 
+const WsThreadGroupsOpenSessionRpc = Rpc.make(WS_METHODS.threadGroupsOpenSession, {
+  payload: ThreadGroupOpenSessionInput,
+  success: ThreadGroupOpenSessionResult,
+  error: threadGroupError,
+});
+
 const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -2001,6 +2010,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsThreadGroupsSubscribeRpc,
   WsThreadGroupsUpdateRpc,
+  WsThreadGroupsOpenSessionRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

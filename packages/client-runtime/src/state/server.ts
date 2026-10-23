@@ -1313,6 +1313,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:thread-group:update",
       tag: WS_METHODS.threadGroupsUpdate,
     }),
+    openThreadGroupSession: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:thread-group:open-session",
+      tag: WS_METHODS.threadGroupsOpenSession,
+    }),
     upsertScheduledTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:upsert",
       tag: WS_METHODS.scheduledTasksUpsert,
