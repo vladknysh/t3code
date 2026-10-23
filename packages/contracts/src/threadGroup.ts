@@ -114,7 +114,7 @@ export class ThreadGroupSessionError extends Schema.TaggedError<ThreadGroupSessi
   "ThreadGroupSessionError",
   {
     groupId: ThreadGroupId,
-    reason: Schema.Literals(["no-model", "no-scratch-project", "launch"]),
+    reason: Schema.Literals(["no-model", "no-scratch-project", "provider-disabled", "launch"]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -124,6 +124,8 @@ export class ThreadGroupSessionError extends Schema.TaggedError<ThreadGroupSessi
         return "No model to start the group session with: no member thread here, and no default model in settings.";
       case "no-scratch-project":
         return "This environment has no scratch folder and no member thread for the group session.";
+      case "provider-disabled":
+        return "The group session's provider is turned off here. Turn it on, or pick a default model in settings.";
       case "launch":
         return "The group session thread could not be started.";
     }

@@ -506,12 +506,20 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
-  // A collapsed shelf hides its groups as it hides its threads.
   // A collapsed shelf hides its groups, and a collapsed group its members, as
   // a collapsed shelf hides its threads: except the open thread, which stays.
   const shelfOpen = { active: true, working: workingShelfExpanded, settled: settledShelfExpanded };
+  // The open thread may be a member, or the group's own session.
   const routeGroupKey =
-    routeRowThreadKey === null ? undefined : grouping.groupKeyByThreadKey.get(routeRowThreadKey);
+    routeRowThreadKey === null
+      ? undefined
+      : (grouping.groupKeyByThreadKey.get(routeRowThreadKey) ??
+        grouping.views.find(
+          (view) =>
+            view.group.sessionThreadId !== null &&
+            scopedThreadKey(scopeThreadRef(view.environmentId, view.group.sessionThreadId)) ===
+              routeRowThreadKey,
+        )?.key);
   const visibleGroups = grouping.views
     .filter((view) => shelfOpen[view.section] || view.key === routeGroupKey)
     .map((view) => ({

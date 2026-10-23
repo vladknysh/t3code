@@ -257,13 +257,14 @@ const make = Effect.gen(function* () {
     }
     const { groups: all } = yield* groups.list.pipe(Effect.mapError(groupFailure));
     // A group session's agent asks about the group it is the session of.
-    const group = all.find(
-      (candidate) =>
-        candidate.sessionThreadId === threadId ||
+    // A session asks about its own group even if it was also added to another.
+    const group =
+      all.find((candidate) => candidate.sessionThreadId === threadId) ??
+      all.find((candidate) =>
         candidate.members.some(
           (member) => member.environmentId === scope.environmentId && member.threadId === threadId,
         ),
-    );
+      );
     if (group === undefined) {
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",

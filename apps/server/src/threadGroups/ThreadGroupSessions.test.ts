@@ -49,17 +49,31 @@ const shells = new Map<string, OrchestrationV2ThreadShell>([
 ]);
 const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
 let scratchAvailable = true;
+let scratchBroken = false;
+let disabledModel: string | null = null;
+const unreadable = new Set<string>();
 
 const layer = ThreadGroupSessions.layer.pipe(
   Layer.provideMerge(ThreadGroups.layer),
   Layer.provide(
     Layer.mock(ThreadManagement.ThreadManagementService)({
-      getThreadShell: (threadId) => Effect.succeed(shells.get(threadId) ?? null),
+      getThreadShell: (threadId) =>
+        unreadable.has(threadId)
+          ? Effect.die("projection read failed")
+          : Effect.succeed(shells.get(threadId) ?? null),
     }),
   ),
   Layer.provide(
     Layer.mock(ThreadLaunch.ThreadLaunchService)({
       launch: (input) => {
+        if (input.modelSelection.model === disabledModel) {
+          return Effect.fail(
+            new ThreadManagement.ThreadManagementProviderInstanceDisabledError({
+              projectId: input.projectId,
+              instanceId: input.modelSelection.instanceId,
+            }),
+          );
+        }
         launched.push(input);
         const threadId = ThreadId.make(`session-${launched.length}`);
         shells.set(
@@ -73,10 +87,15 @@ const layer = ThreadGroupSessions.layer.pipe(
   Layer.provide(
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/unused",
-      ensureScratchProject: Effect.suspend(() =>
-        scratchAvailable
-          ? Effect.succeed({ projectId: scratch })
-          : Effect.fail(new ManagedProjectFolders.ScratchUnavailableError()),
+      ensureScratchProject: Effect.suspend(
+        (): Effect.Effect<{ readonly projectId: ProjectId }, ManagedProjectFolders.ScratchError> =>
+          scratchBroken
+            ? Effect.fail(
+                new ManagedProjectFolders.ScratchFolderError({ folder: "/x", cause: "disk" }),
+              )
+            : scratchAvailable
+              ? Effect.succeed({ projectId: scratch })
+              : Effect.fail(new ManagedProjectFolders.ScratchUnavailableError()),
       ),
     }),
   ),
@@ -86,7 +105,12 @@ const layer = ThreadGroupSessions.layer.pipe(
       getDescriptor: Effect.succeed(descriptorOf(here, "Mac mini")),
     }),
   ),
-  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(
+    ServerSettings.layerTest({
+      defaultModelSelection: haiku,
+      defaultRuntimeMode: "approval-required",
+    }),
+  ),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provideMerge(NodeServices.layer),
 );
@@ -156,13 +180,66 @@ it.layer(layer)("ThreadGroupSessions", (it) => {
     }),
   );
 
-  it.effect("needs a model: a member here or a default in settings", () =>
+  it.effect("starts in the project's default mode, not a member's", () =>
+    Effect.gen(function* () {
+      const sessions = yield* ThreadGroupSessions.ThreadGroupSessions;
+      const group = yield* createGroup([{ environmentId: here, threadId: "newer-member" }]);
+      launched.length = 0;
+      yield* sessions.open(group.id);
+      assert.strictEqual(launched[0]?.runtimeMode, "approval-required");
+    }),
+  );
+
+  it.effect("falls back to the default model when the member's provider is off", () =>
+    Effect.gen(function* () {
+      const sessions = yield* ThreadGroupSessions.ThreadGroupSessions;
+      const group = yield* createGroup([{ environmentId: here, threadId: "newer-member" }]);
+      disabledModel = sonnet.model;
+      launched.length = 0;
+      yield* sessions.open(group.id);
+      disabledModel = null;
+      // The refused launch with the member's model left nothing behind.
+      assert.deepStrictEqual(
+        launched.map((input) => input.modelSelection),
+        [haiku],
+      );
+    }),
+  );
+
+  it.effect("fails instead of starting a second session when a read fails", () =>
+    Effect.gen(function* () {
+      const sessions = yield* ThreadGroupSessions.ThreadGroupSessions;
+      const group = yield* createGroup([{ environmentId: here, threadId: "newer-member" }]);
+      const first = yield* sessions.open(group.id);
+      unreadable.add(first.threadId);
+      launched.length = 0;
+      const exit = yield* sessions.open(group.id).pipe(Effect.exit);
+      unreadable.delete(first.threadId);
+      assert.isTrue(exit._tag === "Failure");
+      assert.strictEqual(launched.length, 0);
+    }),
+  );
+
+  it.effect("does not fall back to a member's checkout when scratch is broken", () =>
+    Effect.gen(function* () {
+      const sessions = yield* ThreadGroupSessions.ThreadGroupSessions;
+      const group = yield* createGroup([{ environmentId: here, threadId: "newer-member" }]);
+      scratchBroken = true;
+      launched.length = 0;
+      const error = yield* sessions.open(group.id).pipe(Effect.flip);
+      scratchBroken = false;
+      assert.strictEqual(error._tag, "ThreadGroupSessionError");
+      assert.strictEqual(launched.length, 0);
+    }),
+  );
+
+  it.effect("uses the default model when no member lives here", () =>
     Effect.gen(function* () {
       const sessions = yield* ThreadGroupSessions.ThreadGroupSessions;
       const group = yield* createGroup([{ environmentId: there, threadId: "remote-only" }]);
-      const error = yield* sessions.open(group.id).pipe(Effect.flip);
-      assert.strictEqual(error._tag, "ThreadGroupSessionError");
-      if (error._tag === "ThreadGroupSessionError") assert.strictEqual(error.reason, "no-model");
+      launched.length = 0;
+      yield* sessions.open(group.id);
+      assert.deepStrictEqual(launched[0]?.modelSelection, haiku);
     }),
   );
 });

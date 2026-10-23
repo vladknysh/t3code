@@ -178,11 +178,11 @@ providers, says **Working** while any of its threads works, and moves to Settled
 once all of them are settled. **Settle** on the group settles every thread in it;
 **Un-settle** reopens them. Click the arrow to fold a group.
 
-Click a group's name to open its group session: a thread on the machine that holds
+Click a group to open its group session: a thread on the machine that holds
 the group, for asking about the whole group ("what is this group working on?").
 Its agent reads every thread in the group, including threads on other machines this
 one is linked to with `t3 environment link`. **Ungroup threads** removes the group and
-leaves its threads as they are. Groups are not shown in the mobile app yet.
+leaves its threads as they are; the group session stays as an ordinary thread. Groups are not shown in the mobile app yet.
 
 ## Link a pull request
 

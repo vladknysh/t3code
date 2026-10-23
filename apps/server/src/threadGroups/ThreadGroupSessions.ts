@@ -55,22 +55,23 @@ const make = Effect.gen(function* () {
   // Two clicks on a group must not start two sessions.
   const opening = yield* Semaphore.make(1);
 
-  const liveShell = (threadId: ThreadId) =>
-    threads.getThreadShell(threadId).pipe(
-      Effect.map((shell) => (shell === null || shell.deletedAt !== null ? null : shell)),
-      Effect.orElseSucceed(() => null),
-    );
-
   const open: ThreadGroupSessions["Service"]["open"] = Effect.fn("ThreadGroupSessions.open")(
     function* (groupId) {
       const failure = (reason: ThreadGroupSessionError["reason"], cause?: unknown) =>
         new ThreadGroupSessionError({ groupId, reason, ...(cause === undefined ? {} : { cause }) });
+      // Gone means deleted or unknown; a failed read is a failure, not a reason
+      // to start a second session.
+      const liveShell = (threadId: ThreadId) =>
+        threads.getThreadShell(threadId).pipe(
+          Effect.map((shell) => (shell === null || shell.deletedAt !== null ? null : shell)),
+          Effect.mapError((cause) => failure("launch", cause)),
+        );
       const group = yield* groups.get(groupId);
       if (group.sessionThreadId !== null && (yield* liveShell(group.sessionThreadId)) !== null) {
         return { threadId: group.sessionThreadId };
       }
-      // The session starts like the group's most recent member here, so it
-      // uses a model the user already runs on this machine.
+      // The session starts with the model of the group's most recent member
+      // here, one the user already runs on this machine.
       const here = yield* environment.getEnvironmentId;
       const local = yield* Effect.forEach(
         group.members.filter((member) => member.environmentId === here),
@@ -86,36 +87,60 @@ const make = Effect.gen(function* () {
       // is none (a data dir inside a repository), it joins the newest member's
       // project here instead.
       const scratch = yield* folders.ensureScratchProject.pipe(
-        Effect.catch((cause) =>
-          latest === undefined
-            ? Effect.fail(failure("no-scratch-project", cause))
-            : Effect.succeed({ projectId: latest.projectId }),
-        ),
+        Effect.catchTags({
+          ScratchUnavailableError: (cause) =>
+            latest === undefined
+              ? Effect.fail(failure("no-scratch-project", cause))
+              : Effect.succeed({ projectId: latest.projectId }),
+          ScratchFolderError: (cause) => Effect.fail(failure("launch", cause)),
+          ScratchProjectError: (cause) => Effect.fail(failure("launch", cause)),
+        }),
       );
       const defaults = yield* settings.getSettings.pipe(
         Effect.map((current) => resolveProjectSettings(current, scratch.projectId).settings),
         Effect.mapError((cause) => failure("launch", cause)),
       );
-      const modelSelection = latest?.modelSelection ?? defaults.defaultModelSelection;
-      if (modelSelection == null) return yield* failure("no-model");
+      const fallbackModel = defaults.defaultModelSelection ?? undefined;
+      const modelSelection = latest?.modelSelection ?? fallbackModel;
+      if (modelSelection === undefined) return yield* failure("no-model");
       const commandId = CommandId.make(
         `group-session:${yield* crypto.randomUUIDv4().pipe(Effect.mapError((cause) => failure("launch", cause)))}`,
       );
-      const launched = yield* launches
-        .launch({
+      const launch = (model: typeof modelSelection) =>
+        launches.launch({
           commandId,
           projectId: scratch.projectId,
           title: group.title,
-          modelSelection,
-          runtimeMode: latest?.runtimeMode ?? defaults.defaultRuntimeMode,
+          modelSelection: model,
+          // The session reads and summarizes: it starts in the project's
+          // default mode, not in whatever mode a member's coding work runs.
+          runtimeMode: defaults.defaultRuntimeMode,
           interactionMode: "default",
           workspaceStrategy: { type: "root" },
           createdBy: "user",
           creationSource: "server",
-        })
-        .pipe(Effect.mapError((cause) => failure("launch", cause)));
-      yield* groups.setSession({ groupId, threadId: launched.threadId });
-      return { threadId: launched.threadId };
+        });
+      // A started session is recorded even if the caller goes away meanwhile,
+      // so the next click reuses it instead of starting another.
+      return yield* Effect.uninterruptible(
+        launch(modelSelection).pipe(
+          Effect.catchTags({
+            // The member's provider may be turned off here since; the
+            // project's default model is the next best choice.
+            ThreadManagementProviderInstanceDisabledError: (cause) =>
+              fallbackModel !== undefined && fallbackModel !== modelSelection
+                ? launch(fallbackModel)
+                : Effect.fail(failure("provider-disabled", cause)),
+          }),
+          Effect.catchTags({
+            ThreadLaunchError: (cause) => Effect.fail(failure("launch", cause)),
+            ThreadManagementProviderInstanceDisabledError: (cause) =>
+              Effect.fail(failure("provider-disabled", cause)),
+          }),
+          Effect.tap((launched) => groups.setSession({ groupId, threadId: launched.threadId })),
+          Effect.map((launched) => ({ threadId: launched.threadId })),
+        ),
+      );
     },
     (effect) => opening.withPermits(1)(effect),
   );
