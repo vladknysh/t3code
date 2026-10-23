@@ -5,6 +5,7 @@ import {
   defaultThreadGroupTitle,
   resolveSidebarThreadGroups,
   threadGroupLanes,
+  threadGroupTones,
 } from "./Sidebar.groups";
 
 const mini = EnvironmentId.make("env-mini");
@@ -134,6 +135,23 @@ describe("threadGroupLanes", () => {
       ["env-mini:shopfront", ["a", "c"]],
       ["env-laptop:paykit", ["b"]],
       ["env-laptop:shopfront", ["d"]],
+    ]);
+  });
+});
+
+describe("threadGroupTones", () => {
+  it("gives groups different colours in the order they were made, whatever the list order", () => {
+    const madeAt = (key: string, minute: number) => {
+      const base = group(key, []);
+      return {
+        ...base,
+        group: { ...base.group, createdAt: IsoDateTime.make(`2026-10-23T10:0${minute}:00.000Z`) },
+      };
+    };
+    const groups = [5, 2, 0, 4, 1, 3].map((minute) => madeAt(`g${minute}`, minute));
+    const tones = threadGroupTones(groups);
+    expect(["g0", "g1", "g2", "g3", "g4", "g5"].map((key) => tones.get(key))).toEqual([
+      0, 1, 2, 3, 4, 0,
     ]);
   });
 });

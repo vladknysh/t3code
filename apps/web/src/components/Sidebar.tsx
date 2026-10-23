@@ -211,7 +211,7 @@ import {
   THREAD_GROUP_LAYOUT_KEY,
   threadGroupLanes,
   ThreadGroupLayoutSchema,
-  threadGroupTone,
+  threadGroupTones,
   type SidebarProjectKey,
   type SidebarThreadGroupSection,
   type SidebarThreadGroupView,
@@ -466,6 +466,7 @@ function useSidebarThreads(input: {
   });
   // Grouped threads leave their own sections and show under their group,
   // which sits where its members' state puts it.
+  const toneByGroupKey = threadGroupTones(threadGroups);
   const grouping = resolveSidebarThreadGroups({
     groups: threadGroups,
     threads: filterSidebarV2VisibleThreads(threads, scopedProjectKeys),
@@ -564,7 +565,7 @@ function useSidebarThreads(input: {
   const threadTitleByKey = new Map(threads.map((thread) => [threadShellKey(thread), thread.title]));
   const memberRowByKey = new Map<string, SidebarGroupMemberRow>();
   for (const { view, shownMembers } of visibleGroups) {
-    const tone = threadGroupTone(view.group.id);
+    const tone = toneByGroupKey.get(view.key) ?? 0;
     const fromByKey = new Map(
       view.group.members.map((member) => [
         scopedThreadKey(scopeThreadRef(member.environmentId, member.threadId)),
@@ -661,6 +662,7 @@ function useSidebarThreads(input: {
     groupViews: grouping.views,
     visibleGroups,
     memberRowByKey,
+    toneByGroupKey,
     groupLayout,
     setGroupLayout,
     activeLaneByGroup,
@@ -1254,6 +1256,7 @@ export default function Sidebar() {
     groupViews,
     visibleGroups,
     memberRowByKey,
+    toneByGroupKey,
     groupLayout,
     setGroupLayout,
     activeLaneByGroup,
@@ -1713,7 +1716,7 @@ export default function Sidebar() {
         memberKeys={view.members.map(threadShellKey).join("\n")}
         collapsed={collapsedGroupKeys.has(view.key)}
         layout={groupLayout}
-        tone={threadGroupTone(view.group.id)}
+        tone={toneByGroupKey.get(view.key) ?? 0}
         lanes={lanes}
         activeLane={
           lanes.some((lane) => lane.key === activeLaneByGroup[view.key])

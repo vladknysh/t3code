@@ -137,7 +137,9 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
       aria-label={`Open group ${props.title}, ${props.memberCount} threads`}
       onClick={() => props.onOpen(props.groupKey)}
       onKeyDown={handleKeyDown}
-      className="min-w-0 cursor-pointer truncate text-left text-sm font-semibold outline-none after:absolute after:inset-0 after:content-['']"
+      // Group names run long ("Migrate payment webhooks to the v2 signing
+      // scheme"), and there are few group rows, so they get two lines.
+      className="line-clamp-2 min-w-0 cursor-pointer text-left text-sm leading-5 font-semibold break-words outline-none after:absolute after:inset-0 after:content-['']"
     >
       {props.title}
     </button>
@@ -255,7 +257,7 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
               className="absolute inset-x-2 -bottom-1 -z-10 h-3 rounded-b-xl bg-(--group)/8"
             />
           ) : null}
-          <div className="flex h-9 min-w-0 items-center gap-1.5 px-(--sidebar-row-content-inset)">
+          <div className="flex min-h-9 min-w-0 items-center gap-1.5 px-(--sidebar-row-content-inset) py-1.5">
             {chevron}
             {title}
             {status}
@@ -273,15 +275,15 @@ export const SidebarThreadGroupRow = memo(function SidebarThreadGroupRow(
         onContextMenu={handleContextMenu}
         className={cn(headerClassName, "rounded-md text-sidebar-foreground")}
       >
-        <div className="flex h-7 min-w-0 items-center gap-1.5 px-(--sidebar-row-content-inset)">
+        <div className="flex min-h-7 min-w-0 items-center gap-1.5 px-(--sidebar-row-content-inset)">
           {chevron}
           <span
             className={cn(
-              "inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-0.5",
+              "inline-flex min-w-0 items-start gap-1.5 rounded-md px-2 py-0.5",
               props.isActive ? "bg-(--group)/30" : "bg-(--group)/15 hover:bg-(--group)/22",
             )}
           >
-            <span aria-hidden className="size-2 shrink-0 rounded-full bg-(--group)" />
+            <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full bg-(--group)" />
             {title}
           </span>
           {status}

@@ -14,7 +14,7 @@ import {
   THREAD_GROUP_LAYOUT_KEY,
   threadGroupLanes,
   ThreadGroupLayoutSchema,
-  threadGroupTone,
+  threadGroupTones,
 } from "../Sidebar.groups";
 import type { EnvironmentThreadGroup } from "../../state/threadGroups";
 import { resolveSidebarThreadStatus, type SidebarThreadStatus } from "../Sidebar.logic";
@@ -50,16 +50,20 @@ export function GroupSessionBoard(props: {
   readonly threadId: ThreadId;
 }) {
   const [layout] = useLocalStorage(THREAD_GROUP_LAYOUT_KEY, "lanes", ThreadGroupLayoutSchema);
-  const group = useThreadGroups().find(
+  const groups = useThreadGroups();
+  const group = groups.find(
     (entry) =>
       entry.environmentId === props.environmentId && entry.group.sessionThreadId === props.threadId,
   );
   // Every chat mounts this; only a group session subscribes to the thread list.
   if (group === undefined || layout !== "lanes") return null;
-  return <GroupSessionLanes group={group} />;
+  return <GroupSessionLanes group={group} tone={threadGroupTones(groups).get(group.key) ?? 0} />;
 }
 
-function GroupSessionLanes(props: { readonly group: EnvironmentThreadGroup }) {
+function GroupSessionLanes(props: {
+  readonly group: EnvironmentThreadGroup;
+  readonly tone: number;
+}) {
   const { group } = props;
   const shells = useQuietThreadShells();
   const projects = useProjects();
@@ -90,7 +94,7 @@ function GroupSessionLanes(props: { readonly group: EnvironmentThreadGroup }) {
     )?.title ?? "Project";
 
   return (
-    <div className="chat-content-lane px-4 pt-3" data-group-tone={threadGroupTone(group.group.id)}>
+    <div className="chat-content-lane px-4 pt-3" data-group-tone={props.tone}>
       <div className="flex flex-wrap gap-2">
         {lanes.map((lane) => {
           const first = lane.members[0]!;

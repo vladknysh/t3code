@@ -100,17 +100,24 @@ export function defaultThreadGroupTitle(titles: readonly string[]): string {
   return title.length > 64 ? `${title.slice(0, 63)}…` : title;
 }
 
-/** How a group lays out its members: C1 lanes or C3 folder tabs. */
 /** How groups lay out their members; a per-client preference. */
 export const THREAD_GROUP_LAYOUT_KEY = "t3code:sidebar:group-layout";
 export const ThreadGroupLayoutSchema = Schema.Literals(["lanes", "folder"]);
 export type SidebarThreadGroupLayout = typeof ThreadGroupLayoutSchema.Type;
 
-/** A group's colour, one of the tones index.css defines, steady for its id. */
-export function threadGroupTone(groupId: string): number {
-  let hash = 0;
-  for (const char of groupId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return hash % THREAD_GROUP_TONES;
+/**
+ * Each group's colour, one of the tones index.css defines, by group key.
+ * Groups take tones in the order they were made, so the first five never
+ * share one (a hash of the id often did), and a group keeps its colour unless
+ * an older group goes away.
+ */
+export function threadGroupTones(
+  groups: readonly Pick<EnvironmentThreadGroup, "key" | "group">[],
+): ReadonlyMap<string, number> {
+  const ordered = groups.toSorted(
+    (a, b) => a.group.createdAt.localeCompare(b.group.createdAt) || a.key.localeCompare(b.key),
+  );
+  return new Map(ordered.map((entry, index) => [entry.key, index % THREAD_GROUP_TONES]));
 }
 const THREAD_GROUP_TONES = 5;
 
