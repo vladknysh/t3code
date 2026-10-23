@@ -346,6 +346,14 @@ it.layer(layer)("ThreadGroupMcpService", (it) => {
       const info = yield* service.info(threadCaller("rate-limit-research-api"), {});
       assert.strictEqual(info.group.id, group.id);
 
+      // The group's session thread is not a member, but asks about the group.
+      yield* (yield* ThreadGroups.ThreadGroupService).setSession({
+        groupId: group.id,
+        threadId: ThreadId.make("group-session"),
+      });
+      const fromSession = yield* service.info(threadCaller("group-session"), {});
+      assert.strictEqual(fromSession.group.id, group.id);
+
       const outsider = yield* service.info(threadCaller("not-grouped"), {}).pipe(Effect.flip);
       assert.strictEqual(outsider.code, "invalid_request");
     }),

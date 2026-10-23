@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { EnvironmentId, IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -29,6 +30,11 @@ export const ThreadGroup = Schema.Struct({
   id: ThreadGroupId,
   title: ThreadGroupTitle,
   members: Schema.Array(ThreadGroupMember),
+  /**
+   * The thread for talking about the whole group, on the group's own
+   * environment. Null until someone opens it; absent from older servers.
+   */
+  sessionThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -87,6 +93,7 @@ export class ThreadGroupStorageError extends Schema.TaggedError<ThreadGroupStora
       "remove-members",
       "delete",
       "forget-thread",
+      "set-session",
     ]),
     cause: Schema.Defect(),
   },
@@ -96,5 +103,36 @@ export class ThreadGroupStorageError extends Schema.TaggedError<ThreadGroupStora
   }
 }
 
-export const ThreadGroupError = Schema.Union([ThreadGroupNotFoundError, ThreadGroupStorageError]);
+export const ThreadGroupOpenSessionInput = Schema.Struct({ groupId: ThreadGroupId });
+export type ThreadGroupOpenSessionInput = typeof ThreadGroupOpenSessionInput.Type;
+
+export const ThreadGroupOpenSessionResult = Schema.Struct({ threadId: ThreadId });
+export type ThreadGroupOpenSessionResult = typeof ThreadGroupOpenSessionResult.Type;
+
+/** Why a group session thread could not be started. */
+export class ThreadGroupSessionError extends Schema.TaggedError<ThreadGroupSessionError>()(
+  "ThreadGroupSessionError",
+  {
+    groupId: ThreadGroupId,
+    reason: Schema.Literals(["no-model", "no-scratch-project", "launch"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "no-model":
+        return "No model to start the group session with: no member thread here, and no default model in settings.";
+      case "no-scratch-project":
+        return "This environment has no scratch folder and no member thread for the group session.";
+      case "launch":
+        return "The group session thread could not be started.";
+    }
+  }
+}
+
+export const ThreadGroupError = Schema.Union([
+  ThreadGroupNotFoundError,
+  ThreadGroupStorageError,
+  ThreadGroupSessionError,
+]);
 export type ThreadGroupError = typeof ThreadGroupError.Type;

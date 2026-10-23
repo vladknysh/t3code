@@ -458,10 +458,21 @@ function useSidebarThreads(input: {
       serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true,
     workingShelfEnabled,
   });
+  // A group's session thread is reached through its group's row.
+  const sessionThreadKeys = new Set(
+    grouping.views.flatMap((view) =>
+      view.group.sessionThreadId === null
+        ? []
+        : [scopedThreadKey(scopeThreadRef(view.environmentId, view.group.sessionThreadId))],
+    ),
+  );
   const ungrouped = (list: readonly EnvironmentThreadShell[]) =>
     grouping.views.length === 0
       ? list
-      : list.filter((thread) => !grouping.groupKeyByThreadKey.has(threadShellKey(thread)));
+      : list.filter((thread) => {
+          const key = threadShellKey(thread);
+          return !grouping.groupKeyByThreadKey.has(key) && !sessionThreadKeys.has(key);
+        });
   const partition = {
     ...ungroupedPartition,
     pinnedThreads: ungrouped(ungroupedPartition.pinnedThreads),
@@ -1503,7 +1514,14 @@ export default function Sidebar() {
       attemptUnsettle(scopeThreadRef(thread.environmentId, thread.id));
     }
   });
-  const openGroup = useStableCallback((groupKey: string) => toggleGroupCollapsed(groupKey));
+  const openGroup = useStableCallback((groupKey: string) => {
+    const view = groupViewByKeyRef.current.get(groupKey);
+    if (view === undefined) return;
+    void (async () => {
+      const threadId = await groupActions.openSession(view.environmentId, view.group.id);
+      if (threadId !== null) navigateToThread(scopeThreadRef(view.environmentId, threadId));
+    })();
+  });
   const commitGroupRename = useStableCallback((groupKey: string, title: string) => {
     const view = groupViewByKeyRef.current.get(groupKey);
     setRenamingGroupKey(null);
@@ -1595,7 +1613,11 @@ export default function Sidebar() {
       settlementSupported={view.members.some((thread) =>
         supportsSettlementOn(thread.environmentId),
       )}
-      isActive={false}
+      isActive={
+        view.group.sessionThreadId !== null &&
+        routeThreadKey ===
+          scopedThreadKey(scopeThreadRef(view.environmentId, view.group.sessionThreadId))
+      }
       isRenaming={renamingGroupKey === view.key}
       renamingTitle={renamingGroupKey === view.key ? renamingGroupTitle : ""}
       onToggleCollapsed={toggleGroupCollapsed}

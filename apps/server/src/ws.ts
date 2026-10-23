@@ -120,6 +120,7 @@ import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts"
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadGroups from "./threadGroups/ThreadGroupService.ts";
+import * as ThreadGroupSessions from "./threadGroups/ThreadGroupSessions.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -1245,6 +1246,7 @@ export const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const threadGroups = yield* ThreadGroups.ThreadGroupService;
+      const threadGroupSessions = yield* ThreadGroupSessions.ThreadGroupSessions;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -2101,6 +2103,7 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.threadGroupsSubscribe]: () => threadGroups.subscribe,
         [WS_METHODS.threadGroupsUpdate]: (input) => threadGroups.update(input),
+        [WS_METHODS.threadGroupsOpenSession]: (input) => threadGroupSessions.open(input.groupId),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>

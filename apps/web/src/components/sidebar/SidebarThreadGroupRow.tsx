@@ -35,6 +35,7 @@ export interface SidebarThreadGroupRowProps {
   readonly isRenaming: boolean;
   readonly renamingTitle: string;
   readonly onToggleCollapsed: (groupKey: string) => void;
+  /** Opens the group session: a thread for talking about the whole group. */
   readonly onOpen: (groupKey: string) => void;
   readonly onSettle: (groupKey: string) => void;
   readonly onUnsettle: (groupKey: string) => void;

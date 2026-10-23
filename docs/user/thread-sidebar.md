@@ -169,6 +169,21 @@ rules to connected environments that support shared settings. Offline environmen
 and older servers keep their previous values. Changing a rule does not reopen
 already settled threads.
 
+## Group related threads
+
+A group keeps threads about one piece of work together, even when they run on
+different machines. Select threads and pick **Group threads** from the context
+menu, or use **Add to group** on a single thread. The group shows its machines and
+providers, says **Working** while any of its threads works, and moves to Settled
+once all of them are settled. **Settle** on the group settles every thread in it;
+**Un-settle** reopens them. Click the arrow to fold a group.
+
+Click a group's name to open its group session: a thread on the machine that holds
+the group, for asking about the whole group ("what is this group working on?").
+Its agent reads every thread in the group, including threads on other machines this
+one is linked to with `t3 environment link`. **Ungroup threads** removes the group and
+leaves its threads as they are. Groups are not shown in the mobile app yet.
+
 ## Link a pull request
 
 The server finds the PR for each unsettled thread's saved branch, even when your
