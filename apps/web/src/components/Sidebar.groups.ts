@@ -1,4 +1,5 @@
-import type { EnvironmentId, ThreadGroup, ThreadId } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import type { EnvironmentId, ProjectId, ThreadGroup, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import type { EnvironmentThreadGroup } from "../state/threadGroups";
@@ -97,4 +98,51 @@ export function defaultThreadGroupTitle(titles: readonly string[]): string {
   const shared = prefix.replace(TITLE_SEPARATORS, "");
   const title = rest.length > 0 && shared.length >= 3 ? shared : first;
   return title.length > 64 ? `${title.slice(0, 63)}…` : title;
+}
+
+/** How groups lay out their members; a per-client preference. */
+export const THREAD_GROUP_LAYOUT_KEY = "t3code:sidebar:group-layout";
+export const ThreadGroupLayoutSchema = Schema.Literals(["lanes", "folder"]);
+export type SidebarThreadGroupLayout = typeof ThreadGroupLayoutSchema.Type;
+
+/**
+ * Each group's colour, one of the tones index.css defines, by group key.
+ * Groups take tones in the order they were made, so the first five never
+ * share one (a hash of the id often did), and a group keeps its colour unless
+ * an older group goes away.
+ */
+export function threadGroupTones(
+  groups: readonly Pick<EnvironmentThreadGroup, "key" | "group">[],
+): ReadonlyMap<string, number> {
+  const ordered = groups.toSorted(
+    (a, b) => a.group.createdAt.localeCompare(b.group.createdAt) || a.key.localeCompare(b.key),
+  );
+  return new Map(ordered.map((entry, index) => [entry.key, index % THREAD_GROUP_TONES]));
+}
+const THREAD_GROUP_TONES = 5;
+
+/** environmentId:projectId, the key the sidebar's project maps use. */
+export type SidebarProjectKey = `${EnvironmentId}:${ProjectId}`;
+
+export interface SidebarThreadGroupLane<T> {
+  /** One lane per repo on one machine. */
+  readonly key: SidebarProjectKey;
+  readonly members: readonly T[];
+}
+
+/**
+ * Members by project, lanes in the order their first member appears. Two
+ * checkouts of one repo on two machines are two lanes: they are separate work.
+ */
+export function threadGroupLanes<
+  T extends { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+>(members: readonly T[]): readonly SidebarThreadGroupLane<T>[] {
+  const lanes = new Map<SidebarProjectKey, T[]>();
+  for (const member of members) {
+    const key: SidebarProjectKey = `${member.environmentId}:${member.projectId}`;
+    const lane = lanes.get(key);
+    if (lane) lane.push(member);
+    else lanes.set(key, [member]);
+  }
+  return [...lanes].map(([key, laneMembers]) => ({ key, members: laneMembers }));
 }

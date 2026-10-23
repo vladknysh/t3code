@@ -50,6 +50,7 @@ describe("V2 preview upgrade", () => {
         [68, "PeerLinks"],
         [69, "ThreadGroups"],
         [70, "ThreadGroupSessions"],
+        [71, "ThreadGroupMemberOrigin"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -143,6 +144,7 @@ describe("V2 preview upgrade", () => {
         [68, "PeerLinks"],
         [69, "ThreadGroups"],
         [70, "ThreadGroupSessions"],
+        [71, "ThreadGroupMemberOrigin"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

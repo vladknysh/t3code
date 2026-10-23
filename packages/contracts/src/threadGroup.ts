@@ -21,6 +21,17 @@ export const ThreadGroupMember = Schema.Struct({
 export type ThreadGroupMember = typeof ThreadGroupMember.Type;
 
 /**
+ * A member as stored. `from` is the agent thread that brought it into the
+ * group, such as a thread that launched it in another project; null when a
+ * person added it. Absent from older servers.
+ */
+export const ThreadGroupMemberEntry = Schema.Struct({
+  ...ThreadGroupMember.fields,
+  from: Schema.NullOr(ThreadGroupMember).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+});
+export type ThreadGroupMemberEntry = typeof ThreadGroupMemberEntry.Type;
+
+/**
  * Threads gathered under one name, like a browser tab group. Only the
  * membership is stored: status, settlement and icons come from the member
  * threads themselves, wherever they live. A group always has members: one
@@ -29,7 +40,7 @@ export type ThreadGroupMember = typeof ThreadGroupMember.Type;
 export const ThreadGroup = Schema.Struct({
   id: ThreadGroupId,
   title: ThreadGroupTitle,
-  members: Schema.Array(ThreadGroupMember),
+  members: Schema.Array(ThreadGroupMemberEntry),
   /**
    * The thread for talking about the whole group, on the group's own
    * environment. Null until someone opens it; absent from older servers.
@@ -43,9 +54,13 @@ export type ThreadGroup = typeof ThreadGroup.Type;
 export const ThreadGroupListResult = Schema.Struct({ groups: Schema.Array(ThreadGroup) });
 export type ThreadGroupListResult = typeof ThreadGroupListResult.Type;
 
+/** Who brings the members in; recorded on every member but itself. */
+const ThreadGroupMembersFrom = Schema.optional(ThreadGroupMember);
+
 export const ThreadGroupCreateInput = Schema.Struct({
   title: ThreadGroupTitle,
   members: Schema.Array(ThreadGroupMember).check(Schema.isMinLength(1)),
+  from: ThreadGroupMembersFrom,
 });
 export type ThreadGroupCreateInput = typeof ThreadGroupCreateInput.Type;
 
@@ -56,6 +71,7 @@ export const ThreadGroupUpdateInput = Schema.Union([
   Schema.TaggedStruct("add-members", {
     groupId: ThreadGroupId,
     members: Schema.Array(ThreadGroupMember),
+    from: ThreadGroupMembersFrom,
   }),
   Schema.TaggedStruct("remove-members", {
     groupId: ThreadGroupId,

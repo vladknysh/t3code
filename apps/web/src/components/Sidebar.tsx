@@ -204,13 +204,15 @@ import {
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
-import {
-  SidebarThreadGroupRow,
-  type SidebarThreadGroupEnvironment,
-} from "./sidebar/SidebarThreadGroupRow";
+import { SidebarThreadGroupRow } from "./sidebar/SidebarThreadGroupRow";
 import { useThreadGroupActions } from "./sidebar/useThreadGroupActions";
 import {
   resolveSidebarThreadGroups,
+  THREAD_GROUP_LAYOUT_KEY,
+  threadGroupLanes,
+  ThreadGroupLayoutSchema,
+  threadGroupTones,
+  type SidebarProjectKey,
   type SidebarThreadGroupSection,
   type SidebarThreadGroupView,
 } from "./Sidebar.groups";
@@ -287,6 +289,18 @@ const GROUP_ADD_PREFIX = "group-add:";
 const isGroupAddMenuId = (id: string): id is `group-add:${string}` =>
   id.startsWith(GROUP_ADD_PREFIX);
 const COLLAPSED_GROUPS_SCHEMA = Schema.Array(Schema.String);
+// Two layouts are built to compare (lanes and folder tabs); the choice is per client.
+const EMPTY_LANE_BY_GROUP: Readonly<Record<string, string>> = {};
+
+/** How one member row shows inside its group. */
+interface SidebarGroupMemberRow {
+  readonly tone: number;
+  /** The project lane this row starts, if it starts one. */
+  readonly laneStart: SidebarProjectKey | null;
+  readonly closesGroup: boolean;
+  /** The title of the thread that brought this one in, if it is known here. */
+  readonly originLabel: string | null;
+}
 const NO_COLLAPSED_GROUPS: readonly string[] = [];
 
 const inboxReturns = createInboxReturnTracker();
@@ -435,6 +449,12 @@ function useSidebarThreads(input: {
     COLLAPSED_GROUPS_SCHEMA,
   );
   const collapsedGroupKeys = new Set(collapsedGroupList);
+  const [groupLayout, setGroupLayout] = useLocalStorage(
+    THREAD_GROUP_LAYOUT_KEY,
+    "lanes",
+    ThreadGroupLayoutSchema,
+  );
+  const [activeLaneByGroup, setActiveLaneByGroup] = useState(EMPTY_LANE_BY_GROUP);
 
   const ungroupedPartition = partitionSidebarThreads({
     threads,
@@ -446,6 +466,7 @@ function useSidebarThreads(input: {
   });
   // Grouped threads leave their own sections and show under their group,
   // which sits where its members' state puts it.
+  const toneByGroupKey = threadGroupTones(threadGroups);
   const grouping = resolveSidebarThreadGroups({
     groups: threadGroups,
     threads: filterSidebarV2VisibleThreads(threads, scopedProjectKeys),
@@ -522,14 +543,54 @@ function useSidebarThreads(input: {
         )?.key);
   const visibleGroups = grouping.views
     .filter((view) => shelfOpen[view.section] || view.key === routeGroupKey)
-    .map((view) => ({
-      view,
-      shownMembers: !collapsedGroupKeys.has(view.key)
-        ? view.members
-        : view.key === routeGroupKey
-          ? view.members.filter((thread) => threadShellKey(thread) === routeRowThreadKey)
-          : EMPTY_THREADS,
-    }));
+    .map((view) => {
+      const lanes = threadGroupLanes(view.members);
+      // Lanes keep a project's threads together; a folder tab shows one project.
+      const tab = groupLayout === "folder" ? activeLaneByGroup[view.key] : undefined;
+      const laid =
+        tab !== undefined && lanes.some((lane) => lane.key === tab)
+          ? lanes.find((lane) => lane.key === tab)!.members
+          : lanes.flatMap((lane) => lane.members);
+      const isRoute = (thread: EnvironmentThreadShell) =>
+        threadShellKey(thread) === routeRowThreadKey;
+      const shownMembers = collapsedGroupKeys.has(view.key)
+        ? view.key === routeGroupKey
+          ? view.members.filter(isRoute)
+          : EMPTY_THREADS
+        : laid.length < view.members.length && view.members.some(isRoute) && !laid.some(isRoute)
+          ? [...laid, ...view.members.filter(isRoute)]
+          : laid;
+      return { view, lanes, shownMembers };
+    });
+  const threadTitleByKey = new Map(threads.map((thread) => [threadShellKey(thread), thread.title]));
+  const memberRowByKey = new Map<string, SidebarGroupMemberRow>();
+  for (const { view, shownMembers } of visibleGroups) {
+    const tone = toneByGroupKey.get(view.key) ?? 0;
+    const fromByKey = new Map(
+      view.group.members.map((member) => [
+        scopedThreadKey(scopeThreadRef(member.environmentId, member.threadId)),
+        member.from,
+      ]),
+    );
+    let lane: SidebarProjectKey | null = null;
+    shownMembers.forEach((thread, index) => {
+      const key = threadShellKey(thread);
+      const laneKey: SidebarProjectKey = `${thread.environmentId}:${thread.projectId}`;
+      const from = fromByKey.get(key);
+      memberRowByKey.set(key, {
+        tone,
+        laneStart: laneKey === lane ? null : laneKey,
+        closesGroup: index === shownMembers.length - 1,
+        originLabel:
+          from == null
+            ? null
+            : (threadTitleByKey.get(
+                scopedThreadKey(scopeThreadRef(from.environmentId, from.threadId)),
+              ) ?? null),
+      });
+      lane = laneKey;
+    });
+  }
   const expandedMembers = (section: SidebarThreadGroupSection) =>
     visibleGroups.flatMap(({ view, shownMembers }) =>
       view.section === section ? shownMembers : EMPTY_THREADS,
@@ -600,6 +661,16 @@ function useSidebarThreads(input: {
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
     groupViews: grouping.views,
     visibleGroups,
+    memberRowByKey,
+    toneByGroupKey,
+    groupLayout,
+    setGroupLayout,
+    activeLaneByGroup,
+    selectGroupLane: (groupKey: string, laneKey: string | null) =>
+      setActiveLaneByGroup((current) => {
+        const { [groupKey]: _previous, ...rest } = current;
+        return laneKey === null ? rest : { ...rest, [groupKey]: laneKey };
+      }),
     memberSectionByKey,
     groupKeyByThreadKey: grouping.groupKeyByThreadKey,
     collapsedGroupKeys,
@@ -1184,6 +1255,12 @@ export default function Sidebar() {
     routeRowThreadKey,
     groupViews,
     visibleGroups,
+    memberRowByKey,
+    toneByGroupKey,
+    groupLayout,
+    setGroupLayout,
+    activeLaneByGroup,
+    selectGroupLane,
     memberSectionByKey,
     groupKeyByThreadKey,
     collapsedGroupKeys,
@@ -1481,8 +1558,10 @@ export default function Sidebar() {
   };
   const groupViewByKey = new Map(groupViews.map((view) => [view.key, view] as const));
   const groupViewByKeyRef = useRef(groupViewByKey);
+  const groupLayoutRef = useRef(groupLayout);
   useEffect(() => {
     groupViewByKeyRef.current = groupViewByKey;
+    groupLayoutRef.current = groupLayout;
   });
   const groupActions = useThreadGroupActions({
     primaryEnvironmentId,
@@ -1550,6 +1629,22 @@ export default function Sidebar() {
           api.contextMenu.show(
             [
               { id: "group-rename" as const, label: "Rename group", icon: "pencil" },
+              {
+                id: "group-layout" as const,
+                label: "Layout",
+                children: [
+                  {
+                    id: "group-layout:lanes" as const,
+                    label: "Lanes",
+                    checked: groupLayoutRef.current === "lanes",
+                  },
+                  {
+                    id: "group-layout:folder" as const,
+                    label: "Folder tabs",
+                    checked: groupLayoutRef.current === "folder",
+                  },
+                ],
+              },
               ...(canSettle
                 ? [
                     settled
@@ -1569,6 +1664,14 @@ export default function Sidebar() {
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
         switch (clicked.value) {
+          case "group-layout":
+            return;
+          case "group-layout:lanes":
+            setGroupLayout("lanes");
+            return;
+          case "group-layout:folder":
+            setGroupLayout("folder");
+            return;
           case "group-rename":
             setRenamingGroupTitle(view.group.title);
             setRenamingGroupKey(groupKey);
@@ -1586,58 +1689,66 @@ export default function Sidebar() {
       })();
     },
   );
-  const groupEnvironments = (
-    view: SidebarThreadGroupView<EnvironmentThreadShell>,
-  ): SidebarThreadGroupEnvironment[] =>
-    [...new Set(view.members.map((thread) => thread.environmentId))].map((environmentId) => ({
-      environmentId,
-      label: environmentLabelById.get(environmentId) ?? "Unknown environment",
-      machine: environmentMachineById.get(environmentId) ?? "server",
-    }));
-  const groupProviders = (view: SidebarThreadGroupView<EnvironmentThreadShell>) => {
-    const entries = new Map<string, SidebarProviderEntry>();
-    for (const thread of view.members) {
-      const instanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
-      const entry = providerEntriesByEnvironment.get(thread.environmentId)?.get(instanceId);
-      if (entry !== undefined) entries.set(`${entry.driverKind}:${entry.displayName}`, entry);
-    }
-    return [...entries.values()];
-  };
+  const laneSummaries = (view: SidebarThreadGroupView<EnvironmentThreadShell>) =>
+    threadGroupLanes(view.members).map((lane) => {
+      const projectKey = lane.key;
+      const project = projectByKey.get(projectKey) ?? null;
+      return {
+        key: lane.key,
+        name: projectDisplayNameByKey.get(projectKey) ?? project?.title ?? "Project",
+        project,
+        machineLabel: environmentLabelById.get(lane.members[0]!.environmentId) ?? null,
+      };
+    });
   const renderGroupRow = (
     view: SidebarThreadGroupView<EnvironmentThreadShell>,
     item: SidebarListItem,
-  ) => (
-    <SidebarThreadGroupRow
-      key={view.key}
-      sortableId={sidebarListItemId(item)}
-      groupKey={view.key}
-      title={view.group.title}
-      section={view.section}
-      memberCount={view.members.length}
-      memberKeys={view.members.map(threadShellKey).join("\n")}
-      collapsed={collapsedGroupKeys.has(view.key)}
-      environments={groupEnvironments(view)}
-      providers={groupProviders(view)}
-      settlementSupported={view.members.some((thread) =>
-        supportsSettlementOn(thread.environmentId),
-      )}
-      isActive={
-        view.group.sessionThreadId !== null &&
-        routeThreadKey ===
-          scopedThreadKey(scopeThreadRef(view.environmentId, view.group.sessionThreadId))
-      }
-      isRenaming={renamingGroupKey === view.key}
-      renamingTitle={renamingGroupKey === view.key ? renamingGroupTitle : ""}
-      onToggleCollapsed={toggleGroupCollapsed}
-      onOpen={openGroup}
-      onSettle={settleGroup}
-      onUnsettle={unsettleGroup}
-      onContextMenu={handleGroupContextMenu}
-      onRenameTitleChange={setRenamingGroupTitle}
-      onCommitRename={commitGroupRename}
-      onCancelRename={cancelGroupRename}
-    />
-  );
+  ) => {
+    const lanes = laneSummaries(view);
+    return (
+      <SidebarThreadGroupRow
+        key={view.key}
+        sortableId={sidebarListItemId(item)}
+        groupKey={view.key}
+        title={view.group.title}
+        section={view.section}
+        memberCount={view.members.length}
+        memberKeys={view.members.map(threadShellKey).join("\n")}
+        collapsed={collapsedGroupKeys.has(view.key)}
+        layout={groupLayout}
+        tone={toneByGroupKey.get(view.key) ?? 0}
+        lanes={lanes}
+        activeLane={
+          lanes.some((lane) => lane.key === activeLaneByGroup[view.key])
+            ? activeLaneByGroup[view.key]!
+            : null
+        }
+        onSelectLane={(groupKey, laneKey) => {
+          selectGroupLane(groupKey, laneKey);
+          // A tab on a folded group would change nothing you can see.
+          if (collapsedGroupKeys.has(groupKey)) toggleGroupCollapsed(groupKey);
+        }}
+        settlementSupported={view.members.some((thread) =>
+          supportsSettlementOn(thread.environmentId),
+        )}
+        isActive={
+          view.group.sessionThreadId !== null &&
+          routeThreadKey ===
+            scopedThreadKey(scopeThreadRef(view.environmentId, view.group.sessionThreadId))
+        }
+        isRenaming={renamingGroupKey === view.key}
+        renamingTitle={renamingGroupKey === view.key ? renamingGroupTitle : ""}
+        onToggleCollapsed={toggleGroupCollapsed}
+        onOpen={openGroup}
+        onSettle={settleGroup}
+        onUnsettle={unsettleGroup}
+        onContextMenu={handleGroupContextMenu}
+        onRenameTitleChange={setRenamingGroupTitle}
+        onCommitRename={commitGroupRename}
+        onCancelRename={cancelGroupRename}
+      />
+    );
+  };
   const attemptUnsnooze = (threadRef: ScopedThreadRef) => {
     void (async () => {
       const result = await unsnoozeThread(threadRef);
@@ -3234,6 +3345,11 @@ export default function Sidebar() {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
+                        const memberRow = nested ? memberRowByKey.get(threadKey) : undefined;
+                        // In lanes the heading names the project, so the row drops its own.
+                        const laneStart =
+                          groupLayout === "lanes" ? (memberRow?.laneStart ?? null) : null;
+                        const inLane = nested && groupLayout === "lanes";
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
                         const rowVariant = isCard ? "card" : "slim";
@@ -3252,6 +3368,21 @@ export default function Sidebar() {
                               optimisticDrop !== null
                             }
                             nested={nested}
+                            groupLayout={nested ? groupLayout : undefined}
+                            groupTone={memberRow?.tone}
+                            closesGroup={memberRow?.closesGroup}
+                            originLabel={memberRow?.originLabel}
+                            {...(laneStart === null
+                              ? {}
+                              : {
+                                  laneProject: projectByKey.get(laneStart) ?? null,
+                                  laneProjectName:
+                                    projectDisplayNameByKey.get(laneStart) ??
+                                    projectByKey.get(laneStart)?.title ??
+                                    "Project",
+                                  laneMachineLabel:
+                                    environmentLabelById.get(thread.environmentId) ?? null,
+                                })}
                             thread={thread}
                             variant={rowVariant}
                             variantAction={
@@ -3308,13 +3439,18 @@ export default function Sidebar() {
                             }
                             scratchMachineLabel={scratchMachineLabelFor(thread)}
                             project={
-                              projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                              null
+                              inLane
+                                ? null
+                                : (projectByKey.get(
+                                    `${thread.environmentId}:${thread.projectId}`,
+                                  ) ?? null)
                             }
                             projectDisplayName={
-                              projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
+                              inLane
+                                ? null
+                                : (projectDisplayNameByKey.get(
+                                    `${thread.environmentId}:${thread.projectId}`,
+                                  ) ?? null)
                             }
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??

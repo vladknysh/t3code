@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { EnvironmentId, IsoDateTime, ProjectId, ThreadId } from "./baseSchemas.ts";
@@ -6,7 +7,7 @@ import {
   OrchestratorMcpThreadStatus,
 } from "./orchestratorMcp.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { ThreadGroup, ThreadGroupId, ThreadGroupTitle } from "./threadGroup.ts";
+import { ThreadGroup, ThreadGroupId, ThreadGroupMember, ThreadGroupTitle } from "./threadGroup.ts";
 
 export const ThreadGroupMcpListInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
@@ -89,6 +90,9 @@ export const ThreadGroupMcpMemberInfo = Schema.Struct({
   environmentId: EnvironmentId,
   environmentLabel: Schema.NullOr(Schema.String),
   threadId: ThreadId,
+  /** The agent thread that brought this member in, such as one that launched it. */
+  // Defaults so a linked environment without origins still decodes.
+  from: Schema.NullOr(ThreadGroupMember).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** Null when the member could not be read; `unavailable` says why. */
   thread: Schema.NullOr(
     Schema.Struct({

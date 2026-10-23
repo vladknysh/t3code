@@ -156,6 +156,52 @@ it.layer(layer)("ThreadGroupService", (it) => {
     }),
   );
 
+  it.effect("records who brought members in, but not on that thread itself", () =>
+    Effect.gen(function* () {
+      const groups = yield* ThreadGroups.ThreadGroupService;
+      const caller = member(here, "spawner");
+      const { group } = yield* groups.update({
+        _tag: "create",
+        title: "cross-project",
+        members: [caller, member(there, "spawned")],
+        from: caller,
+      });
+      assert.deepStrictEqual(
+        group?.members.map((entry) => [entry.threadId, entry.from?.threadId ?? null]),
+        [
+          ["spawner", null],
+          ["spawned", "spawner"],
+        ],
+      );
+      // A person adding a thread leaves no origin.
+      const { group: grown } = yield* groups.update({
+        _tag: "add-members",
+        groupId: group!.id,
+        members: [member(here, "by-hand")],
+      });
+      assert.isNull(grown?.members.at(-1)?.from);
+    }),
+  );
+
+  it.effect("threads the group's own session adds keep no origin", () =>
+    Effect.gen(function* () {
+      const groups = yield* ThreadGroups.ThreadGroupService;
+      const { group } = yield* groups.update({
+        _tag: "create",
+        title: "tidy",
+        members: [member(here, "first")],
+      });
+      yield* groups.setSession({ groupId: group!.id, threadId: ThreadId.make("session") });
+      const { group: grown } = yield* groups.update({
+        _tag: "add-members",
+        groupId: group!.id,
+        members: [member(there, "existing")],
+        from: member(here, "session"),
+      });
+      assert.isNull(grown?.members.at(-1)?.from);
+    }),
+  );
+
   it.effect("subscribers get the list again after each change", () =>
     Effect.gen(function* () {
       const groups = yield* ThreadGroups.ThreadGroupService;

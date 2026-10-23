@@ -2477,3 +2477,30 @@ code {
     }
   }
 }
+
+/* Thread group colours. A group's rows carry data-group-tone (from its id) and
+   read --group, so the pill, rail and folder of one group always match. The
+   colours come from the active theme: tone 0 is its accent (--ring) and the
+   others turn that hue a step either way, so every theme gets its own family
+   at its own lightness and chroma. The clamps keep a near-white, near-black or
+   grey accent from producing groups you can't tell apart. */
+[data-group-tone] {
+  --group: oklch(
+    from var(--ring) clamp(0.5, l, 0.72) max(c, 0.08) calc(h + var(--group-hue-turn, 0))
+  );
+}
+[data-group-tone="0"] {
+  --group-hue-turn: 0;
+}
+[data-group-tone="1"] {
+  --group-hue-turn: 45;
+}
+[data-group-tone="2"] {
+  --group-hue-turn: -45;
+}
+[data-group-tone="3"] {
+  --group-hue-turn: 90;
+}
+[data-group-tone="4"] {
+  --group-hue-turn: -90;
+}
